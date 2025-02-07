@@ -1,5 +1,14 @@
 import 'package:flutter/material.dart';
-import '../supabase_manager.dart';
+import '../supabase_manager.dart'; // Supabase Manager のパスは適宜調整
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:audioplayers/audioplayers.dart';
+
+// バックグラウンドメッセージハンドラー（トップレベル関数）
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  print("Handling a background message: ${message.messageId}");
+  // 必要であれば、ここで追加の処理（ローカル通知の表示など）を行う。
+  // ※ バックグラウンドでの音声再生には、通常、ネイティブ実装が必要。
+}
 
 class OrderListPage extends StatefulWidget {
   const OrderListPage({Key? key}) : super(key: key);
@@ -10,15 +19,86 @@ class OrderListPage extends StatefulWidget {
 
 class _OrderListPageState extends State<OrderListPage> {
   late final Stream<List<Map<String, dynamic>>> _ordersStream;
+  final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
+  final AudioPlayer _audioPlayer = AudioPlayer();
 
   @override
   void initState() {
     super.initState();
+
+    _setupFCM();
+
     // 「orders」テーブルのリアルタイムストリームを取得
     _ordersStream = supabase
         .from('orders')
         .stream(primaryKey: ['id'])
         .order('created_at', ascending: false);
+  }
+
+  Future<void> _setupFCM() async {
+    // 権限リクエスト（iOS, Web）
+    NotificationSettings settings = await _firebaseMessaging.requestPermission(
+      alert: true,
+      announcement: false,
+      badge: true,
+      carPlay: false,
+      criticalAlert: false, // 必要に応じて true に
+      provisional: false,
+      sound: true,
+    );
+
+    print('User granted permission: ${settings.authorizationStatus}');
+
+    // FCM トークンの取得とサーバーへの送信（必要に応じて）
+    String? token = await _firebaseMessaging.getToken();
+    print("Firebase Token: $token");
+    // TODO: ここで、FCM トークンをサーバーに送信する処理を実装
+
+    // フォアグラウンドメッセージのハンドリング
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      print('Got a message whilst in the foreground!');
+      print('Message data: ${message.data}');
+
+      if (message.notification != null) {
+        print('Message also contained a notification: ${message.notification}');
+        _showNotification(message);
+      }
+    });
+
+    // バックグラウンドからの復帰時の処理
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      print('A new onMessageOpenedApp event was published!');
+      // TODO: 通知をタップしてアプリを開いた際の処理（例：特定の画面への遷移）
+    });
+
+    // バックグラウンドメッセージハンドラーの設定
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  }
+
+  // 通知を表示する関数
+  void _showNotification(RemoteMessage message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(message.notification?.title ?? '新しい注文'),
+        content: Text(message.notification?.body ?? '注文が入りました！'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("OK"),
+          ),
+        ],
+      ),
+    );
+
+    // 音を鳴らす
+    _audioPlayer.play(AssetSource('notification_sound.mp3'));
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.dispose(); // リソースの解放
+    super.dispose();
   }
 
   @override
@@ -39,7 +119,8 @@ class _OrderListPageState extends State<OrderListPage> {
           // エラー時の表示
           if (snapshot.hasError) {
             return Center(
-              child: Text('エラーが発生しました: ${snapshot.error}', style: TextStyle(color: Colors.red)),
+              child: Text('エラーが発生しました: ${snapshot.error}',
+                  style: TextStyle(color: Colors.red)),
             );
           }
 
@@ -163,7 +244,7 @@ class _OrderListPageState extends State<OrderListPage> {
   }
 }
 
-/// 注文アイテム表示用ウィジェット
+/// 注文アイテム表示用ウィジェット (変更なし)
 class _OrderItemsView extends StatelessWidget {
   final List<dynamic> items;
   const _OrderItemsView({Key? key, required this.items}) : super(key: key);
@@ -207,7 +288,7 @@ class _OrderItemsView extends StatelessWidget {
   }
 }
 
-/// ステータスバッジ（色分け）
+/// ステータスバッジ（色分け）(変更なし)
 class _StatusBadge extends StatelessWidget {
   final String? status;
   const _StatusBadge({Key? key, required this.status}) : super(key: key);
@@ -248,7 +329,7 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-/// 「まだ注文はありません」用のWidget
+/// 「まだ注文はありません」用のWidget (変更なし)
 class _EmptyOrdersView extends StatelessWidget {
   const _EmptyOrdersView();
 
