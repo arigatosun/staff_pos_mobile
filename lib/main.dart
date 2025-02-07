@@ -1,7 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'pages/order_list_page.dart';
 
-void main() {
+void main() async {
+  // Flutter のバインディングを確実に初期化
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Firebase の初期化
+  await Firebase.initializeApp();
+
   runApp(const MyApp());
 }
 

@@ -35,12 +35,14 @@ class _OrderListPageState extends State<OrderListPage> {
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          // エラー時
+
+          // エラー時の表示
           if (snapshot.hasError) {
             return Center(
-              child: Text('エラーが発生しました: ${snapshot.error}'),
+              child: Text('エラーが発生しました: ${snapshot.error}', style: TextStyle(color: Colors.red)),
             );
           }
+
           // データ取得完了
           final orders = snapshot.data!;
           if (orders.isEmpty) {
@@ -103,8 +105,8 @@ class _OrderListPageState extends State<OrderListPage> {
                         children: [
                           if (status != 'provided') ...[
                             ElevatedButton.icon(
-                              onPressed: () {
-                                _updateStatus(orderId!, 'provided');
+                              onPressed: () async {
+                                await _updateStatus(orderId!, 'provided');
                               },
                               icon: const Icon(Icons.check_circle_outline),
                               label: const Text("提供完了"),
@@ -116,8 +118,8 @@ class _OrderListPageState extends State<OrderListPage> {
                           ],
                           if (status != 'paid')
                             ElevatedButton.icon(
-                              onPressed: () {
-                                _updateStatus(orderId!, 'paid');
+                              onPressed: () async {
+                                await _updateStatus(orderId!, 'paid');
                               },
                               icon: const Icon(Icons.payment),
                               label: const Text("会計済み"),
@@ -140,13 +142,23 @@ class _OrderListPageState extends State<OrderListPage> {
 
   /// ステータス更新
   Future<void> _updateStatus(String orderId, String newStatus) async {
-    final response = await supabase
-        .from('orders')
-        .update({'status': newStatus})
-        .eq('id', orderId);
+    try {
+      final response = await supabase
+          .from('orders')
+          .update({'status': newStatus})
+          .eq('id', orderId);
 
-    if (response is! List && response is! Map) {
-      debugPrint('Update error: $response');
+      if (response is List || response is Map) {
+        debugPrint('ステータス更新成功');
+      } else {
+        debugPrint('ステータス更新に失敗: $response');
+        throw Exception('ステータス更新エラー');
+      }
+    } catch (e) {
+      debugPrint('エラー: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('ステータス更新中にエラーが発生しました: $e'))
+      );
     }
   }
 }
