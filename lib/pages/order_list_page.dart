@@ -187,17 +187,41 @@ class _OrderListPageState extends State<OrderListPage> {
   Future<void> _updateStatus(String orderId, String newStatus) async {
     if (!mounted) return;
     try {
-      final response = await supabase
+      // 1) 更新と同時に SELECT で返却データを取得する
+      final updateResponse = await supabase
           .from('orders')
           .update({'status': newStatus})
-          .eq('id', orderId);
+          .eq('id', orderId)
+      // ▼ これを追加: 更新後のレコードを取得 (例: select("*") や single(), maybeSingle() etc.)
+          .select()
+          .maybeSingle();
 
-      if (response is List || response is Map) {
-        print('ステータス更新成功');
-      } else {
-        print('ステータス更新に失敗: $response');
+      // 2) デバッグログを詳しく表示
+      print('--- Debug: updateResponse ---');
+      print('Data: ${updateResponse}');
+      // SupabaseのFlutterクライアントであれば、
+      // updateResponse そのものが List や Map の場合もありますが、
+      // PostgrestResponse型の場合は updateResponse.data / updateResponse.error などになる場合も。
+
+      // 3) 成功判定の仕方をより厳密に
+      if (updateResponse == null) {
+        print('ステータス更新に失敗: updateResponse is null');
+        throw Exception('ステータス更新エラー (no data returned)');
+      }
+
+      // もし updateResponse が Map なら
+      if (updateResponse is Map && updateResponse.isNotEmpty) {
+        print('ステータス更新成功: $updateResponse');
+      }
+      // もし List の場合は
+      else if (updateResponse is List && updateResponse.isNotEmpty) {
+        print('ステータス更新成功: $updateResponse');
+      }
+      else {
+        print('ステータス更新に失敗: $updateResponse');
         throw Exception('ステータス更新エラー');
       }
+
     } catch (e) {
       print('エラー: $e');
       if (mounted) {
