@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'pages/order_list_page.dart';
+import 'pages/home_page.dart';
 
 /// バックグラウンドメッセージを受信する際に呼ばれるハンドラ.
 /// Flutter 3.3+では @pragma('vm:entry-point') が必須になる場合があるので付与.
@@ -9,7 +9,6 @@ import 'pages/order_list_page.dart';
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // バックグラウンドの isolate でも Firebase.initializeApp() が必要
   await Firebase.initializeApp();
-
   print("Handling a background message: ${message.messageId}");
   print("Message data: ${message.data}");
 }
@@ -17,7 +16,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // フォアグラウンド用のFirebase初期化
+  // Firebase初期化 (フォアグラウンド用)
   await Firebase.initializeApp();
 
   // バックグラウンドメッセージを受信した際に呼ばれる関数を登録
@@ -36,6 +35,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.teal, // AppBarなどのベースカラー
         scaffoldBackgroundColor: Colors.grey[100], // 背景色を少し明るいグレー
+
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             foregroundColor: Colors.white, // ボタン文字色
@@ -52,7 +52,7 @@ class MyApp extends StatelessWidget {
           elevation: 2,
         ),
       ),
-      home: const OrderListPage(),
+      home: const HomePage(), // ← BottomNavigationBarを持つホーム画面へ
     );
   }
 }
