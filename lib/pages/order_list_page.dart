@@ -2,14 +2,7 @@ import 'package:flutter/material.dart';
 import '../supabase_manager.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:device_info_plus/device_info_plus.dart'; // 追加
-
-// バックグラウンドメッセージハンドラー（トップレベル関数）
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  print("Handling a background message: ${message.messageId}");
-  print("Message data: ${message.data}");
-  // バックグラウンドでの追加処理が必要な場合はここに実装
-}
+import 'package:device_info_plus/device_info_plus.dart';
 
 class OrderListPage extends StatefulWidget {
   const OrderListPage({Key? key}) : super(key: key);
@@ -23,8 +16,9 @@ class _OrderListPageState extends State<OrderListPage> {
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   final AudioPlayer _audioPlayer = AudioPlayer();
   final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
+
   String? _currentFCMToken;
-  String _currentDeviceId = ''; // 修正：String型として初期化
+  String _currentDeviceId = '';
   String? _deviceName;
 
   @override
@@ -34,7 +28,7 @@ class _OrderListPageState extends State<OrderListPage> {
     // デバイス情報の取得
     _initializeDeviceInfo();
 
-    // FCMの初期設定
+    // FCMの初期設定 (フォアグラウンド専用)
     _setupFCM();
 
     // トークン更新時のリスナーを追加
@@ -47,7 +41,7 @@ class _OrderListPageState extends State<OrderListPage> {
         .order('created_at', ascending: false);
   }
 
-  // デバイス情報の初期化
+  /// 1) デバイス情報の初期化
   Future<void> _initializeDeviceInfo() async {
     try {
       if (Theme.of(context).platform == TargetPlatform.android) {
@@ -63,13 +57,11 @@ class _OrderListPageState extends State<OrderListPage> {
     }
   }
 
-
-// FCMトークンの更新処理
+  /// 2) FCMトークンの更新処理
   Future<void> _updateFCMToken(String token) async {
     if (_currentFCMToken == token) return;
-
     try {
-      if (_currentDeviceId.isEmpty) { // 修正：空文字列チェック
+      if (_currentDeviceId.isEmpty) {
         // 新規デバイスの登録
         final response = await supabase
             .from('pos_devices')
@@ -80,8 +72,7 @@ class _OrderListPageState extends State<OrderListPage> {
             .select()
             .single();
 
-        // デバイスIDを保存
-        _currentDeviceId = response['id'].toString(); // 修正：toString()を使用
+        _currentDeviceId = response['id'].toString();
         print('New device registered with ID: $_currentDeviceId');
       } else {
         // 既存デバイスの更新
@@ -107,84 +98,84 @@ class _OrderListPageState extends State<OrderListPage> {
     }
   }
 
-Future<void> _setupFCM() async {
-  try {
-    // 権限リクエスト（iOS, Web）
-    NotificationSettings settings = await _firebaseMessaging.requestPermission(
-      alert: true,
-      announcement: false,
-      badge: true,
-      carPlay: false,
-      criticalAlert: false,
-      provisional: false,
-      sound: true,
-    );
-
-    print('User granted permission: ${settings.authorizationStatus}');
-
-    // FCMトークンの取得
-    String? token = await _firebaseMessaging.getToken();
-    print("Firebase Token: $token");
-
-    if (token != null && mounted) {
-      await _updateFCMToken(token);
-    }
-
-    // フォアグラウンドメッセージのハンドリング
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print('Got a message whilst in the foreground!');
-      print('Message data: ${message.data}');
-
-      if (message.notification != null) {
-        print('Message also contained a notification: ${message.notification}');
-        if (mounted) {
-          _showNotification(message);
-        }
-      }
-    });
-
-    // バックグラウンドからの復帰時の処理
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      print('A new onMessageOpenedApp event was published!');
-      print('Message data: ${message.data}');
-    });
-
-    // バックグラウンドメッセージハンドラーの設定
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
-  } catch (e) {
-    print('FCM setup error: $e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('通知の設定中にエラーが発生しました: $e')),
+  /// 3) フォアグラウンドでのFCM設定
+  Future<void> _setupFCM() async {
+    try {
+      // iOSなどでの通知許可リクエスト
+      NotificationSettings settings = await _firebaseMessaging.requestPermission(
+        alert: true,
+        announcement: false,
+        badge: true,
+        carPlay: false,
+        criticalAlert: false,
+        provisional: false,
+        sound: true,
       );
+      print('User granted permission: ${settings.authorizationStatus}');
+
+      // トークン取得
+      String? token = await _firebaseMessaging.getToken();
+      print("Firebase Token: $token");
+      if (token != null && mounted) {
+        await _updateFCMToken(token);
+      }
+
+      // フォアグラウンドメッセージのハンドリング
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        print('Got a message whilst in the foreground!');
+        print('Message data: ${message.data}');
+
+        if (message.notification != null) {
+          print('Message also contained a notification: ${message.notification}');
+          if (mounted) {
+            _showNotification(message);
+          }
+        }
+      });
+
+      // アプリがバックグラウンドから復帰したときに呼ばれる
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        print('A new onMessageOpenedApp event was published!');
+        print('Message data: ${message.data}');
+      });
+
+      // ★ ここでは onBackgroundMessage は設定しない
+      //   main.dart でトップレベル関数として登録済み
+      //   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+    } catch (e) {
+      print('FCM setup error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('通知の設定中にエラーが発生しました: $e')),
+        );
+      }
     }
   }
-}
 
-// 通知を表示する関数
-void _showNotification(RemoteMessage message) {
-  if (!mounted) return;
+  /// 4) フォアグラウンド時の通知表示
+  void _showNotification(RemoteMessage message) {
+    if (!mounted) return;
 
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: Text(message.notification?.title ?? '新しい注文'),
-      content: Text(message.notification?.body ?? '注文が入りました！'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text("OK"),
-        ),
-      ],
-    ),
-  );
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(message.notification?.title ?? '新しい注文'),
+        content: Text(message.notification?.body ?? '注文が入りました！'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("OK"),
+          ),
+        ],
+      ),
+    );
 
-  // 音を鳴らす
-  _audioPlayer.play(AssetSource('notification_sound.mp3')).catchError((error) {
-    print('Error playing notification sound: $error');
-  });
-}
+    // 音声再生 (assets/notification_sound.mp3) - フォアグラウンドのみ
+    _audioPlayer.play(AssetSource('notification_sound.mp3')).catchError((error) {
+      print('Error playing notification sound: $error');
+    });
+  }
 
   @override
   void dispose() {
@@ -192,10 +183,9 @@ void _showNotification(RemoteMessage message) {
     super.dispose();
   }
 
-  /// ステータス更新
+  /// 5) 注文ステータス更新
   Future<void> _updateStatus(String orderId, String newStatus) async {
     if (!mounted) return;
-
     try {
       final response = await supabase
           .from('orders')
@@ -218,6 +208,7 @@ void _showNotification(RemoteMessage message) {
     }
   }
 
+  /// 6) UI
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -263,7 +254,8 @@ void _showNotification(RemoteMessage message) {
   }
 }
 
-// OrderCardを別のウィジェットとして分離
+// --- 以下はUI部品のみ変更なし ---
+
 class _OrderCard extends StatelessWidget {
   final Map<String, dynamic> order;
   final Future<void> Function(String, String) onStatusUpdate;
@@ -287,6 +279,7 @@ class _OrderCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // テーブル名とステータスバッジ
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -307,7 +300,7 @@ class _OrderCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-
+            // 注文アイテム表示
             if (items != null && items.isNotEmpty)
               _OrderItemsView(items: items)
             else
@@ -315,9 +308,8 @@ class _OrderCard extends StatelessWidget {
                 "注文内容なし",
                 style: TextStyle(color: Colors.grey),
               ),
-
             const SizedBox(height: 12),
-
+            // ステータス更新ボタン
             _StatusButtons(
               status: status,
               orderId: orderId,
@@ -330,7 +322,6 @@ class _OrderCard extends StatelessWidget {
   }
 }
 
-// ステータス更新ボタンを別のウィジェットとして分離
 class _StatusButtons extends StatelessWidget {
   final String? status;
   final String? orderId;
@@ -374,7 +365,6 @@ class _StatusButtons extends StatelessWidget {
   }
 }
 
-/// 「まだ注文はありません」用のWidget
 class _EmptyOrdersView extends StatelessWidget {
   const _EmptyOrdersView();
 
@@ -392,7 +382,6 @@ class _EmptyOrdersView extends StatelessWidget {
   }
 }
 
-/// ステータスバッジ（色分け）用のWidget
 class _StatusBadge extends StatelessWidget {
   final String? status;
   const _StatusBadge({Key? key, required this.status}) : super(key: key);
@@ -433,7 +422,6 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-/// 注文アイテム表示用のWidget
 class _OrderItemsView extends StatelessWidget {
   final List<dynamic> items;
   const _OrderItemsView({Key? key, required this.items}) : super(key: key);

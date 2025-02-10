@@ -1,13 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'pages/order_list_page.dart';
 
-void main() async {
-  // Flutter のバインディングを確実に初期化
+/// バックグラウンドメッセージを受信する際に呼ばれるハンドラ.
+/// Flutter 3.3+では @pragma('vm:entry-point') が必須になる場合があるので付与.
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // バックグラウンドの isolate でも Firebase.initializeApp() が必要
+  await Firebase.initializeApp();
+
+  print("Handling a background message: ${message.messageId}");
+  print("Message data: ${message.data}");
+}
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Firebase の初期化
+  // フォアグラウンド用のFirebase初期化
   await Firebase.initializeApp();
+
+  // バックグラウンドメッセージを受信した際に呼ばれる関数を登録
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   runApp(const MyApp());
 }
@@ -21,13 +35,11 @@ class MyApp extends StatelessWidget {
       title: 'Staff POS App',
       theme: ThemeData(
         primarySwatch: Colors.teal, // AppBarなどのベースカラー
-        scaffoldBackgroundColor: Colors.grey[100], // 背景色を少し明るいグレーに
+        scaffoldBackgroundColor: Colors.grey[100], // 背景色を少し明るいグレー
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             foregroundColor: Colors.white, // ボタン文字色
-            textStyle: const TextStyle(
-              fontWeight: FontWeight.bold,
-            ),
+            textStyle: const TextStyle(fontWeight: FontWeight.bold),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(8),
             ),
