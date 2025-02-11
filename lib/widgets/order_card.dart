@@ -4,82 +4,70 @@ import 'order_items_view.dart';
 
 class OrderCard extends StatelessWidget {
   final Map<String, dynamic> orderData;
-  final Future<void> Function(String orderId, String newStatus) onStatusUpdate;
+
+  // Item単位のステータス更新を受け取る関数
+  final Future<void> Function(String orderId, int itemIndex, String newStatus)
+  onItemStatusUpdate;
 
   const OrderCard({
     Key? key,
     required this.orderData,
-    required this.onStatusUpdate,
+    required this.onItemStatusUpdate,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     final tableName = orderData['table_name'] as String? ?? '不明';
-    final status = orderData['status'] as String? ?? 'unknown';
     final orderId = orderData['id'] as String? ?? '';
-    final items = orderData['items'] as List<dynamic>? ?? [];
+    final statusList = _extractItemStatuses(orderData['items'] as List? ?? []);
+    final hasUnprovided = statusList.contains('unprovided');
 
     // created_at があれば経過時間を計算
     final createdAtStr = orderData['created_at'] as String?;
-    final elapsedTimeText = _getElapsedTime(createdAtStr);
+    final diffMinutes = _getElapsedMinutes(createdAtStr);
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
+    // 経過時間によって枠色や背景色を変化させる例
+    final cardColor = _getCardColor(diffMinutes);
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: cardColor, // 経過時間による色
+        borderRadius: BorderRadius.circular(8),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(8.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 上部: テーブル名 & 経過時間
+            // 上段: テーブル名 + 経過時間 + 全体ステータスバッジ
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.table_bar, color: Colors.teal),
-                    const SizedBox(width: 6),
-                    Text(
-                      tableName,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+                Text(
+                  "テーブル: $tableName",
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 Text(
-                  elapsedTimeText,
-                  style: TextStyle(
-                    color: Colors.grey[700],
-                    fontSize: 14,
-                  ),
+                  _formatElapsedTime(diffMinutes),
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
                 ),
               ],
             ),
-
-            const SizedBox(height: 8),
-            // ステータスバッジ
+            const SizedBox(height: 6),
+            // 全体ステータスバッジ (未提供アイテムがあれば unprovided, なければ provided)
             Align(
               alignment: Alignment.centerLeft,
-              child: StatusBadge(status: status),
+              child: StatusBadge(status: hasUnprovided ? 'unprovided' : 'provided'),
             ),
-
-            const SizedBox(height: 12),
-            // 注文アイテムリスト
-            if (items.isNotEmpty)
-              OrderItemsView(items: items)
-            else
-              const Text(
-                "注文内容なし",
-                style: TextStyle(color: Colors.grey),
-              ),
-
-            const SizedBox(height: 12),
-            // ステータス更新ボタン
-            _StatusButtons(
-              status: status,
+            const SizedBox(height: 6),
+            // アイテム一覧
+            OrderItemsView(
               orderId: orderId,
-              onStatusUpdate: onStatusUpdate,
+              items: orderData['items'] as List<dynamic>? ?? [],
+              onItemStatusUpdate: onItemStatusUpdate,
             ),
           ],
         ),
@@ -87,67 +75,48 @@ class OrderCard extends StatelessWidget {
     );
   }
 
-  /// created_at(ISO8601文字列)からの経過時間を "たった今","x分前","x時間前","x日前" の形に変換
-  String _getElapsedTime(String? createdAtStr) {
-    if (createdAtStr == null) return '';
+  /// items配列内にある status 一覧を抽出
+  List<String> _extractItemStatuses(List items) {
+    return items
+        .map((e) => (e as Map<String, dynamic>)['status'] as String? ?? '')
+        .toList();
+  }
+
+  /// created_at からの経過分数を返す
+  int _getElapsedMinutes(String? createdAtStr) {
+    if (createdAtStr == null) return 0;
     DateTime? createdAt;
     try {
       createdAt = DateTime.parse(createdAtStr).toLocal();
     } catch (_) {
-      return '';
+      return 0;
     }
-
     final diff = DateTime.now().difference(createdAt);
-
-    if (diff.inMinutes < 1) {
-      return 'たった今';
-    } else if (diff.inMinutes < 60) {
-      return '${diff.inMinutes}分前';
-    } else if (diff.inHours < 24) {
-      return '${diff.inHours}時間前';
-    } else {
-      return '${diff.inDays}日前';
-    }
+    return diff.inMinutes;
   }
-}
 
-/// ステータス更新ボタン
-class _StatusButtons extends StatelessWidget {
-  final String status;
-  final String orderId;
-  final Future<void> Function(String, String) onStatusUpdate;
-
-  const _StatusButtons({
-    required this.status,
-    required this.orderId,
-    required this.onStatusUpdate,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // 会計済みは不要なのでボタンは「提供完了」のみ表示
-    // すでに provided の場合は押せないようにする
-    if (status == 'provided') {
-      return Container(
-        alignment: Alignment.centerRight,
-        child: const Text(
-          '提供済み',
-          style: TextStyle(fontSize: 14, color: Colors.grey),
-        ),
-      );
+  /// 経過時間(分)によって色を変える
+  Color _getCardColor(int diffMinutes) {
+    if (diffMinutes >= 20) {
+      return Colors.orange[300]!;
+    } else if (diffMinutes >= 10) {
+      return Colors.orange[100]!;
     }
+    return Colors.white; // 10分未満は白
+  }
 
-    // unprovided → 「提供完了」ボタン
-    return Align(
-      alignment: Alignment.centerRight,
-      child: ElevatedButton.icon(
-        onPressed: () => onStatusUpdate(orderId, 'provided'),
-        icon: const Icon(Icons.check_circle_outline),
-        label: const Text("提供完了"),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.amber[700],
-        ),
-      ),
-    );
+  /// 分数を "x分前" / "x時間前" / "x日前" / "たった今" に変換
+  String _formatElapsedTime(int minutes) {
+    if (minutes < 1) {
+      return "たった今";
+    } else if (minutes < 60) {
+      return "${minutes}分前";
+    }
+    final hours = minutes ~/ 60;
+    if (hours < 24) {
+      return "${hours}時間前";
+    }
+    final days = hours ~/ 24;
+    return "${days}日前";
   }
 }

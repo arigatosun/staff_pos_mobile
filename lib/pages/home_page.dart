@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'orders/order_list_page.dart';
-import 'tables/table_list_page.dart';
-import 'history/payment_history_page.dart';
+import 'package:staff_pos_app/pages/orders/order_list_page.dart';
+import 'package:staff_pos_app/pages/tables/table_list_page.dart';
+import 'package:staff_pos_app/pages/history/payment_history_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -15,8 +15,11 @@ class _HomePageState extends State<HomePage> {
 
   // 表示するページをリスト管理
   final List<Widget> _pages = const [
+    // 1) 新しい「注文管理ページ（キッチンオーダー画面）」
     OrderListPage(),
+    // 2) 現在の「テーブル管理ページ」(旧: order_list_page のテーブル分割表示を移植)
     TableListPage(),
+    // 3) 会計履歴ページ
     PaymentHistoryPage(),
   ];
 
@@ -30,15 +33,8 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // 各ページで個別のAppBarを使用したい場合、下記を削除し
-      // ページ側(例: OrderListPage)で Scaffold(appBar: ...) を実装してもOK
-      appBar: AppBar(
-        title: const Text('スタッフ用POS'),
-        centerTitle: true,
-      ),
-
+      // AppBarを削除しているため、画面上部には何も表示されません
       body: _pages[_selectedIndex],
-
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
