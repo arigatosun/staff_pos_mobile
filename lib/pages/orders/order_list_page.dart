@@ -1,20 +1,125 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+// ↓ 追加: UTC扱いのパースを簡略化する場合やフォーマットに使いたい場合
+import 'package:intl/intl.dart';
 
 import '../../services/supabase_manager.dart';
 
-/// タブ: [未提供, 提供済, キャンセル]
-/// ・archived非表示
-/// ・未提供だけスワイプ(右→提供済, 左→キャンセル)
-/// ・ソート: delayed(未提供遅延大が上), newest(新しい順)
-/// ・タブの選択色は背景なし＋濃いグレー文字、周りにシャドウ。非選択は薄いグレー
-/// ・切り替えスイッチON時は緑
-/// ・新着表示: 商品名の右に黄色●+「新着!」、その右に時間
-/// ・遅延してない未提供はステータスバッジがグレー、10分以上なら赤
+/// テーブルカラー管理クラス:
+/// - 20色のプリセットを持つ
+/// - Supabase上の `table_colors` テーブルと同期する
+class TableColorManager {
+  /// プリセットカラーリスト（20色）
+  static const List<Color> presetColors = [
+    Color(0xFF1E88E5),  // 青
+    Color(0xFF43A047),  // 緑
+    Color(0xFFE53935),  // 赤
+    Color(0xFF8E24AA),  // 紫
+    Color(0xFFFFB300),  // オレンジ
+    Color(0xFF00ACC1),  // シアン
+    Color(0xFF5E35B1),  // ディープパープル
+    Color(0xFF00897B),  // ティール
+    Color(0xFFF4511E),  // ディープオレンジ
+    Color(0xFF7CB342),  // ライトグリーン
+    Color(0xFF3949AB),  // インディゴ
+    Color(0xFFD81B60),  // ピンク
+    Color(0xFF6D4C41),  // ブラウン
+    Color(0xFF039BE5),  // ライトブルー
+    Color(0xFF546E7A),  // ブルーグレー
+    Color(0xFF8D6E63),  // ブラウン
+    Color(0xFF616161),  // グレー
+    Color(0xFF607D8B),  // ブルーグレー
+    Color(0xFFFB8C00),  // オレンジ
+    Color(0xFF0097A7),  // シアン
+  ];
+
+  /// デフォルトカラー
+  static const Color defaultColor = Color(0xFF9E9E9E);
+
+  /// ローカルの「テーブル名→色インデックス」のキャッシュ
+  static final Map<String, int> _tableColorMap = {};
+
+  /// 初期ロード済みかどうか
+  static bool _isLoaded = false;
+
+  /// Supabaseからテーブルカラーのマッピングをロード
+  static Future<void> loadTableColorsFromSupabase() async {
+    if (_isLoaded) return;
+    try {
+      final response = await supabase
+          .from('table_colors')
+          .select('table_name,color_index');
+
+      if (response is List) {
+        for (final row in response) {
+          final name = row['table_name'] as String;
+          final idx = row['color_index'] as int;
+          _tableColorMap[name] = idx;
+        }
+      }
+      _isLoaded = true;
+      debugPrint('TableColorManager: Loaded ${_tableColorMap.length} entries.');
+    } catch (error, stack) {
+      debugPrint('loadTableColorsFromSupabase error: $error');
+    }
+  }
+
+  static Future<Color> getTableColor(String tableName) async {
+    if (!_isLoaded) {
+      await loadTableColorsFromSupabase();
+    }
+
+    final existingIdx = _tableColorMap[tableName];
+    if (existingIdx != null &&
+        existingIdx >= 0 &&
+        existingIdx < presetColors.length) {
+      return presetColors[existingIdx];
+    }
+
+    // 割り当て
+    final newIndex = _findUnusedColorIndex();
+    if (newIndex == null) {
+      // 全使用済
+      debugPrint('No more preset colors available. Using defaultColor.');
+      _tableColorMap[tableName] = -1;
+      return defaultColor;
+    }
+
+    _tableColorMap[tableName] = newIndex;
+    await _saveNewColorMapping(tableName, newIndex);
+    return presetColors[newIndex];
+  }
+
+  static int? _findUnusedColorIndex() {
+    for (int i = 0; i < presetColors.length; i++) {
+      if (!_tableColorMap.values.contains(i)) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  static Future<void> _saveNewColorMapping(String tableName, int colorIndex) async {
+    try {
+      final inserted = await supabase.from('table_colors').insert({
+        'table_name': tableName,
+        'color_index': colorIndex,
+      });
+      if (inserted is List && inserted.isNotEmpty) {
+        debugPrint('Assigned color_index=$colorIndex for table "$tableName".');
+      }
+    } catch (e) {
+      debugPrint('Failed to insert table_colors: $e');
+    }
+  }
+}
+
+/// ---------------------------------------------------------
+/// OrderListPage
+/// ---------------------------------------------------------
 class OrderListPage extends StatefulWidget {
   const OrderListPage({Key? key}) : super(key: key);
 
@@ -24,7 +129,7 @@ class OrderListPage extends StatefulWidget {
 
 class _OrderListPageState extends State<OrderListPage>
     with SingleTickerProviderStateMixin {
-  // ----- FCM関連 -----
+  // FCM関連
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   final AudioPlayer _audioPlayer = AudioPlayer();
   final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
@@ -34,24 +139,13 @@ class _OrderListPageState extends State<OrderListPage>
   String? _deviceName;
   bool _isSoundOn = true; // 通知音 ON/OFF
 
-  // ----- Supabaseストリーム -----
   late final Stream<List<Map<String, dynamic>>> _ordersStream;
 
-  // ----- タブ (3つ) -----
   late TabController _tabController;
-  final List<String> _tabs = [
-    '未提供',
-    '提供済',
-    'キャンセル',
-  ];
+  final List<String> _tabs = ['未提供', '提供済', 'キャンセル'];
 
-  // ----- ソート方法 -----
-  // delayed -> 未提供(遅延大)が上, 提供済/キャンセルは下
-  // newest -> createdAt desc
-  String _sortMethod = 'delayed';
-
-  // テーブル→色キャッシュ
-  final Map<String, Color> _tableColorMap = {};
+  // ソート方法
+  String _sortMethod = 'oldest'; // or 'newest'
 
   Timer? _timer; // 1分おきに再描画
 
@@ -64,7 +158,7 @@ class _OrderListPageState extends State<OrderListPage>
     _setupFCM();
     FirebaseMessaging.instance.onTokenRefresh.listen(_updateFCMToken);
 
-    // Supabase リアルタイム
+    // リアルタイム
     _ordersStream = supabase
         .from('orders')
         .stream(primaryKey: ['id'])
@@ -74,6 +168,9 @@ class _OrderListPageState extends State<OrderListPage>
     _timer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
     });
+
+    // カラーの初期ロード
+    TableColorManager.loadTableColorsFromSupabase();
   }
 
   @override
@@ -85,7 +182,6 @@ class _OrderListPageState extends State<OrderListPage>
   }
 
   // ---------------- デバイス情報 ----------------
-
   Future<void> _initializeDeviceInfo() async {
     try {
       if (Theme.of(context).platform == TargetPlatform.android) {
@@ -101,8 +197,7 @@ class _OrderListPageState extends State<OrderListPage>
     }
   }
 
-  // ---------------- FCMセットアップ ----------------
-
+  // ---------------- FCM ----------------
   Future<void> _updateFCMToken(String token) async {
     if (_currentFCMToken == token) return;
     try {
@@ -140,7 +235,9 @@ class _OrderListPageState extends State<OrderListPage>
   Future<void> _setupFCM() async {
     try {
       NotificationSettings settings = await _firebaseMessaging.requestPermission(
-        alert: true, badge: true, sound: true,
+        alert: true,
+        badge: true,
+        sound: true,
       );
       print('User granted permission: ${settings.authorizationStatus}');
 
@@ -189,7 +286,6 @@ class _OrderListPageState extends State<OrderListPage>
   }
 
   // ---------------- ステータス更新 ----------------
-
   Future<void> _updateItemStatus({
     required String orderId,
     required int itemIndex,
@@ -201,6 +297,7 @@ class _OrderListPageState extends State<OrderListPage>
           .select('*')
           .eq('id', orderId)
           .maybeSingle();
+
       if (resp == null) throw Exception('注文が見つかりません');
 
       final items = resp['items'] as List;
@@ -213,14 +310,26 @@ class _OrderListPageState extends State<OrderListPage>
         'status': newStatus,
       };
 
-      final updated = await supabase
-          .from('orders')
-          .update({'items': items})
-          .eq('id', orderId)
-          .select()
-          .maybeSingle();
-      if (updated == null) {
-        throw Exception('ステータス更新失敗');
+      try {
+        final result = await supabase
+            .from('orders')
+            .update({'items': items})
+            .eq('id', orderId)
+            .select(); // 更新後の行を返す
+
+        if (result is List && result.isNotEmpty) {
+          final updatedRow = result.first;
+          print('ステータス更新成功: $updatedRow');
+        } else {
+          throw Exception('ステータス更新失敗（更新後の行が返らなかった）');
+        }
+      } catch (e) {
+        print('ステータス更新エラー: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('ステータス更新エラー: $e')),
+          );
+        }
       }
       print('ステータス更新: order=$orderId, index=$itemIndex => $newStatus');
     } catch (e) {
@@ -234,20 +343,12 @@ class _OrderListPageState extends State<OrderListPage>
   }
 
   // ---------------- リスト生成・ソート・フィルタ ----------------
-
-  /// ordersを商品単位にフラット化; archivedは非表示
   List<_ItemData> _flattenOrders(List<Map<String, dynamic>> orders) {
     final result = <_ItemData>[];
     for (final o in orders) {
-      // デバッグ用にログ出力
-      print('Order data:');
-      print('  ID: ${o['id']}');
-      print('  Created at: ${o['created_at']}');
-      print('  Current time: ${DateTime.now().toIso8601String()}');
-
       final orderId = o['id'] as String? ?? '';
       final tableName = o['table_name'] as String? ?? '不明テーブル';
-      final createdAt = o['created_at'] as String? ?? '';
+      final createdAt = o['created_at'] as String? ?? ''; // timestamp(オフセットなし)
       final items = o['items'] as List<dynamic>? ?? [];
 
       for (int i = 0; i < items.length; i++) {
@@ -256,65 +357,86 @@ class _OrderListPageState extends State<OrderListPage>
         final qty = it['quantity'] as int? ?? 0;
         final status = it['status'] as String? ?? 'unprovided';
 
-        if (status == 'archived') continue; // archived除外
+        // archivedは除外
+        if (status == 'archived') continue;
 
-        result.add(
-          _ItemData(
-            orderId: orderId,
-            tableName: tableName,
-            createdAt: createdAt,
-            itemIndex: i,
-            itemName: name,
-            quantity: qty,
-            status: status,
-          ),
-        );
+        result.add(_ItemData(
+          orderId: orderId,
+          tableName: tableName,
+          createdAt: createdAt, // UTCのつもり
+          itemIndex: i,
+          itemName: name,
+          quantity: qty,
+          status: status,
+        ));
       }
     }
     return result;
   }
 
-  /// ソート
-  /// delayed: 未提供 -> 遅延(2..0)が上, 提供済/キャンセルは -1
-  /// newest: createdAt desc
+  // timestamp(オフセット無) -> 「実はUTC」として扱い -> local 時刻に変換
+  DateTime _parseNaiveTimestampAsUtc(String timeStr) {
+    if (timeStr.isEmpty) {
+      // 適当な値(今)を返す
+      return DateTime.now();
+    }
+    final naive = DateTime.parse(timeStr);
+    // これだと「ローカル時刻」と解釈される → 実はUTC なので補正:
+    final dtUtc = DateTime.utc(
+      naive.year,
+      naive.month,
+      naive.day,
+      naive.hour,
+      naive.minute,
+      naive.second,
+      naive.millisecond,
+      naive.microsecond,
+    );
+    // dtUtc は「UTC扱いのDateTime」
+    return dtUtc;
+  }
+
+  /// 未提供で10分以上なら遅延
+  int _calcDelayMinutes(_ItemData item) {
+    if (item.status != 'unprovided') return -1;
+    final diff = _elapsedMinutes(item.createdAt);
+    return (diff >= 10) ? diff : -1;
+  }
+
+  /// 遅延大きい順 + 古い/新しい順
   void _sortItems(List<_ItemData> items) {
-    if (_sortMethod == 'delayed') {
-      items.sort((a, b) {
-        final rankA = _calcDelayRank(a);
-        final rankB = _calcDelayRank(b);
-        final diffRank = rankB.compareTo(rankA);
-        if (diffRank != 0) return diffRank;
-        // rank同じ -> createdAt desc
-        return b.createdAt.compareTo(a.createdAt);
-      });
-    } else {
-      // newest
-      items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    }
+    items.sort((a, b) {
+      final delayA = _calcDelayMinutes(a);
+      final delayB = _calcDelayMinutes(b);
+
+      // 1) 遅延大きい順
+      final compareDelay = delayB.compareTo(delayA);
+      if (compareDelay != 0) return compareDelay;
+
+      // 2) createdAt (古い or 新着)
+      final localA = _parseNaiveTimestampAsUtc(a.createdAt).toLocal();
+      final localB = _parseNaiveTimestampAsUtc(b.createdAt).toLocal();
+
+      if (_sortMethod == 'oldest') {
+        return localA.compareTo(localB);
+      } else {
+        return localB.compareTo(localA);
+      }
+    });
   }
 
-  int _calcDelayRank(_ItemData item) {
-    if (item.status == 'unprovided') {
-      final diff = _elapsedMinutes(item.createdAt);
-      if (diff >= 20) return 2;
-      if (diff >= 10) return 1;
-      return 0;
-    }
-    // 提供済 or キャンセル
-    return -1;
-  }
-
-  int _elapsedMinutes(String? createdAt) {
-    if (createdAt == null) return 0;
+  /// 「xx分前」用
+  int _elapsedMinutes(String? createdAtStr) {
+    if (createdAtStr == null || createdAtStr.isEmpty) return 0;
     try {
-      final dt = DateTime.parse(createdAt).toLocal();
-      return DateTime.now().difference(dt).inMinutes;
+      // 実際はUTCなので補正してローカルへ
+      final localDt = _parseNaiveTimestampAsUtc(createdAtStr).toLocal();
+      return DateTime.now().difference(localDt).inMinutes;
     } catch (_) {
       return 0;
     }
   }
 
-  /// タブごとのフィルタ [未提供, 提供済, キャンセル]
   List<_ItemData> _filterByStatus(List<_ItemData> items, String tab) {
     switch (tab) {
       case '未提供':
@@ -328,28 +450,17 @@ class _OrderListPageState extends State<OrderListPage>
     }
   }
 
-  /// テーブルごとに色を一度だけ決定して使い回す
-  Color _getTableColor(String tableName) {
-    // すでにテーブル名がマップにあればそれを返す
-    if (_tableColorMap.containsKey(tableName)) {
-      return _tableColorMap[tableName]!;
-    }
-    // なければ初回生成して保存
-    final rng = Random(tableName.hashCode);
-    final hue = rng.nextDouble() * 360;
-    final color = HSVColor.fromAHSV(1, hue, 0.5, 0.9).toColor();
-    _tableColorMap[tableName] = color;
-    return color;
-  }
-
   void _toggleSortMethod() {
     setState(() {
-      _sortMethod = (_sortMethod == 'delayed') ? 'newest' : 'delayed';
+      _sortMethod = (_sortMethod == 'oldest') ? 'newest' : 'oldest';
     });
   }
 
-  // ---------------- UI ----------------
+  Future<Color> _getTableColor(String tableName) async {
+    return TableColorManager.getTableColor(tableName);
+  }
 
+  // ---------------- UI ----------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -357,7 +468,6 @@ class _OrderListPageState extends State<OrderListPage>
         title: const Text('注文管理'),
         centerTitle: true,
         actions: [
-          // 通知音スイッチ + ソート
           Row(
             children: [
               const Icon(Icons.volume_up, size: 18),
@@ -367,19 +477,19 @@ class _OrderListPageState extends State<OrderListPage>
                   value: _isSoundOn,
                   onChanged: (val) => setState(() => _isSoundOn = val),
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  // Material Designの標準的なスイッチカラー
-                  activeColor: Theme.of(context).colorScheme.primary,      // スイッチのつまみの色
-                  activeTrackColor: Theme.of(context).colorScheme.primary.withOpacity(0.5),  // ONトラック色
-                  inactiveThumbColor: Colors.grey[50],    // OFFつまみ色
-                  inactiveTrackColor: Colors.grey[400],   // OFFトラック色
+                  activeColor: Theme.of(context).colorScheme.primary,
+                  activeTrackColor:
+                  Theme.of(context).colorScheme.primary.withOpacity(0.5),
+                  inactiveThumbColor: Colors.grey[50],
+                  inactiveTrackColor: Colors.grey[400],
                 ),
               ),
               IconButton(
                 onPressed: _toggleSortMethod,
                 icon: const Icon(Icons.swap_vert),
-                tooltip: (_sortMethod == 'delayed')
-                    ? '並び替え: 遅延順'
-                    : '並び替え: 新着順',
+                tooltip: (_sortMethod == 'oldest')
+                    ? '並び替え: 古い順 → 新着順'
+                    : '並び替え: 新着順 → 古い順',
               ),
             ],
           ),
@@ -388,19 +498,11 @@ class _OrderListPageState extends State<OrderListPage>
         bottom: TabBar(
           controller: _tabController,
           isScrollable: false,
-          labelStyle: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold
-          ),
-          // テキストカラーを変更
-          labelColor: Colors.white,        // 選択中のタブの文字色を白に
-          unselectedLabelColor: Colors.white.withOpacity(0.7),   // 非選択のタブの文字色を半透明の白に
-          // インジケーター（下線）のスタイルを変更
+          labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
           indicator: const UnderlineTabIndicator(
-            borderSide: BorderSide(
-              width: 2,
-              color: Colors.white,  // 下線の色を白に
-            ),
+            borderSide: BorderSide(width: 2, color: Colors.white),
           ),
           tabs: _tabs.map((t) => Tab(text: t)).toList(),
         ),
@@ -422,7 +524,6 @@ class _OrderListPageState extends State<OrderListPage>
 
           final allItems = _flattenOrders(snapshot.data!);
 
-          // 各タブの内容
           return TabBarView(
             controller: _tabController,
             children: _tabs.map((tab) {
@@ -437,7 +538,14 @@ class _OrderListPageState extends State<OrderListPage>
                 itemCount: filtered.length,
                 itemBuilder: (ctx, i) {
                   final item = filtered[i];
-                  return _buildDismissible(item);
+                  return FutureBuilder<Color>(
+                    future: _getTableColor(item.tableName),
+                    builder: (context, snapColor) {
+                      final color =
+                          snapColor.data ?? TableColorManager.defaultColor;
+                      return _buildDismissible(item, color);
+                    },
+                  );
                 },
               );
             }).toList(),
@@ -447,19 +555,23 @@ class _OrderListPageState extends State<OrderListPage>
     );
   }
 
-  /// 未提供のみスワイプ
-  Widget _buildDismissible(_ItemData item) {
+  /// スワイプ (未提供→提供済 / キャンセル, etc)
+  Widget _buildDismissible(_ItemData item, Color tableColor) {
     final keyVal = ValueKey('${item.orderId}_${item.itemIndex}_${item.status}');
-    final isUnprovided = (item.status == 'unprovided');
+    final isUnprovided = item.status == 'unprovided';
+    final isCanceled = item.status == 'canceled';
+    final isProvided = item.status == 'provided';
 
-    final direction = isUnprovided ? DismissDirection.horizontal : DismissDirection.none;
+    final canSwipe = isUnprovided || isCanceled || isProvided;
+    final direction =
+    canSwipe ? DismissDirection.horizontal : DismissDirection.none;
 
     return Dismissible(
       key: keyVal,
       direction: direction,
       confirmDismiss: (dir) async {
+        // 未提供 → キャンセル
         if (isUnprovided && dir == DismissDirection.endToStart) {
-          // キャンセル確認
           final confirm = await showDialog<bool>(
             context: context,
             builder: (c) => AlertDialog(
@@ -479,71 +591,177 @@ class _OrderListPageState extends State<OrderListPage>
           );
           if (confirm != true) return false;
         }
+
+        // キャンセル → 未提供
+        if (isCanceled) {
+          final confirm = await showDialog<bool>(
+            context: context,
+            builder: (c) => AlertDialog(
+              title: const Text('未提供に戻す確認'),
+              content: Text('「${item.itemName} ×${item.quantity}」を未提供に戻しますか？'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(c, false),
+                  child: const Text('いいえ'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(c, true),
+                  child: const Text('はい'),
+                ),
+              ],
+            ),
+          );
+          if (confirm != true) return false;
+        }
+
+        // 提供済 → 未提供
+        if (isProvided) {
+          final confirm = await showDialog<bool>(
+            context: context,
+            builder: (c) => AlertDialog(
+              title: const Text('未提供に戻す確認'),
+              content: Text('「${item.itemName} ×${item.quantity}」を未提供に戻しますか？'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(c, false),
+                  child: const Text('いいえ'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(c, true),
+                  child: const Text('はい'),
+                ),
+              ],
+            ),
+          );
+          if (confirm != true) return false;
+        }
+
         return true;
       },
       onDismissed: (dir) async {
-        if (dir == DismissDirection.startToEnd) {
-          // 右=>提供済
+        if (isUnprovided) {
+          if (dir == DismissDirection.startToEnd) {
+            // 右 => 提供済
+            await _updateItemStatus(
+              orderId: item.orderId,
+              itemIndex: item.itemIndex,
+              newStatus: 'provided',
+            );
+          } else {
+            // 左 => キャンセル
+            await _updateItemStatus(
+              orderId: item.orderId,
+              itemIndex: item.itemIndex,
+              newStatus: 'canceled',
+            );
+          }
+        } else if (isCanceled) {
+          // キャンセル => 未提供
           await _updateItemStatus(
             orderId: item.orderId,
             itemIndex: item.itemIndex,
-            newStatus: 'provided',
+            newStatus: 'unprovided',
           );
-        } else {
-          // 左=>キャンセル
+        } else if (isProvided) {
+          // 提供済 => 未提供
           await _updateItemStatus(
             orderId: item.orderId,
             itemIndex: item.itemIndex,
-            newStatus: 'canceled',
+            newStatus: 'unprovided',
           );
         }
       },
-      background: Container(
-        color: Colors.green,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        alignment: Alignment.centerLeft,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(Icons.check, color: Colors.white),
-            SizedBox(width: 8),
-            Text(
-              "提供済にする",
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-      ),
-      secondaryBackground: Container(
-        color: Colors.red,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        alignment: Alignment.centerRight,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(Icons.cancel_outlined, color: Colors.white),
-            SizedBox(width: 8),
-            Text(
-              "キャンセル",
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-      ),
-      child: _OrderCard(
-        itemData: item,
-        tableColor: _getTableColor(item.tableName),
-      ),
+      background: _buildSwipeBackground(item, isStartToEnd: true),
+      secondaryBackground: _buildSwipeBackground(item, isStartToEnd: false),
+      child: _OrderCard(itemData: item, tableColor: tableColor),
     );
   }
-}
 
-// ----- モデル
+  Widget _buildSwipeBackground(_ItemData item, {required bool isStartToEnd}) {
+    final isUnprovided = item.status == 'unprovided';
+    final isCanceled = item.status == 'canceled';
+    final isProvided = item.status == 'provided';
+
+    if (isStartToEnd) {
+      if (isUnprovided) {
+        // 右 => 提供済
+        return Container(
+          color: Colors.green,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          alignment: Alignment.centerLeft,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.check, color: Colors.white),
+              SizedBox(width: 8),
+              Text("提供済にする",
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        );
+      } else if (isCanceled || isProvided) {
+        // 右 => 未提供に戻す
+        return Container(
+          color: Colors.blue,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          alignment: Alignment.centerLeft,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.undo, color: Colors.white),
+              SizedBox(width: 8),
+              Text("未提供に戻す",
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        );
+      }
+    } else {
+      // 左 => キャンセル or 未提供に戻す
+      if (isUnprovided) {
+        return Container(
+          color: Colors.red,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          alignment: Alignment.centerRight,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.cancel_outlined, color: Colors.white),
+              SizedBox(width: 8),
+              Text("キャンセル",
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        );
+      } else if (isCanceled || isProvided) {
+        return Container(
+          color: Colors.blue,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          alignment: Alignment.centerRight,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.undo, color: Colors.white),
+              SizedBox(width: 8),
+              Text("未提供に戻す",
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        );
+      }
+    }
+    return const SizedBox.shrink();
+  }
+}
 
 class _ItemData {
   final String orderId;
   final String tableName;
-  final String createdAt;
+  final String createdAt; // DBにはUTCのつもりで保存
   final int itemIndex;
   final String itemName;
   final int quantity;
@@ -560,8 +778,6 @@ class _ItemData {
   });
 }
 
-// ----- カードUI
-
 class _OrderCard extends StatelessWidget {
   final _ItemData itemData;
   final Color tableColor;
@@ -574,13 +790,14 @@ class _OrderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 経過時間
     final diffMin = _elapsedMinutes(itemData.createdAt);
 
-    // 未提供のみ遅延背景
+    // 遅延背景
     Color bgColor = Colors.white;
     if (itemData.status == 'unprovided') {
-      if (diffMin >= 20) {
-        bgColor = Colors.orange[300]!;
+      if (diffMin >= 40) {
+        bgColor = Colors.orange[400]!;
       } else if (diffMin >= 10) {
         bgColor = Colors.orange[100]!;
       }
@@ -591,14 +808,13 @@ class _OrderCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(8),
-        // 左端の太い色付きボーダーを「テーブルごとの固定色」で表示
-        border: Border(left: BorderSide(width: 6, color: tableColor)),
+        border: Border(left: BorderSide(width: 20, color: tableColor)),
       ),
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1行目: テーブル名(左) + ステータス(右)
+          // 上段
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -609,11 +825,11 @@ class _OrderCard extends StatelessWidget {
                   fontSize: 14,
                 ),
               ),
-              _buildStatusBadge(itemData.status, diffMin),
+              _buildStatusBadge(itemData.status),
             ],
           ),
           const SizedBox(height: 6),
-          // 2行目: 商品名(左) + (新着 + 時間)(右)
+          // 下段
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -624,7 +840,6 @@ class _OrderCard extends StatelessWidget {
               Row(
                 children: [
                   if (_isNew(diffMin)) ...[
-                    // 黄色の● + 新着! の表示
                     Container(
                       width: 8,
                       height: 8,
@@ -634,13 +849,10 @@ class _OrderCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 4),
-                    const Text(
-                      "新着!",
-                      style: TextStyle(fontSize: 12, color: Colors.black87),
-                    ),
+                    const Text("新着!",
+                        style: TextStyle(fontSize: 12, color: Colors.black87)),
                     const SizedBox(width: 10),
                   ],
-                  // 時間
                   Text(
                     _formatElapsedTime(diffMin),
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
@@ -654,14 +866,12 @@ class _OrderCard extends StatelessWidget {
     );
   }
 
-  Widget _buildStatusBadge(String status, int diffMin) {
+  Widget _buildStatusBadge(String status) {
     if (status == 'unprovided') {
-      // 遅延(10分以上) -> 赤, それ未満 -> グレー
-      final isDelayed = diffMin >= 10;
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: isDelayed ? Colors.redAccent : Colors.grey,
+          color: Colors.grey,
           borderRadius: BorderRadius.circular(4),
         ),
         child: const Text(
@@ -708,25 +918,37 @@ class _OrderCard extends StatelessWidget {
     );
   }
 
+  /// 新着かどうか(3分以内)
   bool _isNew(int diffMin) => diffMin < 3;
 
-  int _elapsedMinutes(String? createdAtStr) {
-    if (createdAtStr == null) return 0;
+  /// createdAt(オフセット無し)を "実はUTC" として扱い → ローカル
+  int _elapsedMinutes(String createdAtStr) {
+    if (createdAtStr.isEmpty) return 0;
     try {
-      // created_atをUTCとして解析
-      final utcDt = DateTime.parse(createdAtStr);
+      // 1) parse
+      final naive = DateTime.parse(createdAtStr);
+      // 2) それを UTC として再定義
+      final dtUtc = DateTime.utc(
+        naive.year,
+        naive.month,
+        naive.day,
+        naive.hour,
+        naive.minute,
+        naive.second,
+        naive.millisecond,
+        naive.microsecond,
+      );
+      // 3) ローカル時刻
+      final dtLocal = dtUtc.toLocal();
 
-      // 現在時刻をUTCで取得
-      final nowUtc = DateTime.now().toUtc();
-
-      // UTC同士で差分を計算
-      return nowUtc.difference(utcDt).inMinutes;
+      return DateTime.now().difference(dtLocal).inMinutes;
     } catch (e) {
       print('Time parsing error: $e');
       return 0;
     }
   }
 
+  /// 経過時間の文字列化
   String _formatElapsedTime(int minutes) {
     if (minutes < 1) return "たった今";
     if (minutes < 60) return "${minutes}分前";
