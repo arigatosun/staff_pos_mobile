@@ -13,20 +13,38 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   supabase_flutter: ^2.8.3
-  firebase_core: ^3.11.0
-  firebase_messaging: ^15.2.2
+
+  # Firebaseパッケージ
+  # 以前のバージョン
+  # firebase_core: ^3.11.0
+  # firebase_messaging: ^15.2.2
+  # 更新後のバージョン
+  firebase_core: ^2.24.2
+  firebase_messaging: ^14.7.10
+
   audioplayers: ^6.1.1
   device_info_plus: ^11.2.2
-
-  # =======================================
-  # ここに intl パッケージを追加
-  # =======================================
   intl: ^0.18.0
+
+  # iOS対応のために追加した新規パッケージ
+  platform: ^3.1.4
+
+  # FirebaseCLIのために追加した新規パッケージ
+  firebase_core_platform_interface: ^5.0.0
+  firebase_messaging_platform_interface: ^4.5.22
+
+  # アプリケーションの状態管理用に追加
+  provider: ^6.1.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # 以前のバージョン
+  # flutter_lints: ^5.0.0
+  # 開発時の補助ツール（新規追加）
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.3.9
 
 flutter:
   uses-material-design: true
