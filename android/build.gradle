@@ -1,7 +1,15 @@
-allprojects {
+buildscript {
+    ext.kotlin_version = '2.0.0'  // 1.8.22から2.0.0に更新
     repositories {
         google()
         mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.0.0'  // Gradleバージョンも更新
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        // Firebase用のclaspathを追加
+        classpath 'com.google.gms:google-services:4.4.2'
     }
 }
 
