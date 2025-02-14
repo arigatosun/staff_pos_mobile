@@ -1,1 +1,8 @@
+#include "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
 #include "Generated.xcconfig"
+
+// 非モジュールなヘッダーを許可する
+CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES=YES
+
+// もし iOS 12.0 以上を明示したい場合は追加
+IPHONEOS_DEPLOYMENT_TARGET=12.0

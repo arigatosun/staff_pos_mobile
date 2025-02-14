@@ -4,11 +4,16 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'pages/home_page.dart';
 
+// ★ 追加: FlutterFire CLI で生成されたファイルをimport
+import 'firebase_options.dart';
+
 /// バックグラウンドメッセージを受信する際に呼ばれるハンドラ.
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // バックグラウンドの isolate でも Firebase.initializeApp() が必要
-  await Firebase.initializeApp();
+  // バックグラウンドの isolate でも Firebase.initializeApp(options: ...) が必要
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   print("Handling a background message: ${message.messageId}");
   print("Message data: ${message.data}");
 }
@@ -34,8 +39,10 @@ Future<void> main() async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
 
-    // Firebase初期化
-    await Firebase.initializeApp();
+    // ★ Firebase初期化: 新たに options を指定
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
     print('Firebase initialized successfully');
 
     // 通知権限のリクエスト（Android/iOS共通）
@@ -62,7 +69,7 @@ Future<void> main() async {
     for (int i = 0; i < 3; i++) {
       token = await getFCMToken();
       if (token != null) break;
-      await Future.delayed(Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 2));
     }
 
     // トークン更新時のハンドラー
@@ -126,7 +133,7 @@ class MyApp extends StatelessWidget {
           ),
           elevation: 2,
         ),
-        appBarTheme: AppBarTheme(
+        appBarTheme: const AppBarTheme(
           backgroundColor: Colors.teal,
           foregroundColor: Colors.white,
           elevation: 2,
