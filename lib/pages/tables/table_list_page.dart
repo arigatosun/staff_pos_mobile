@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import '../../services/supabase_manager.dart';
 import '../../widgets/empty_orders_view.dart';
 
-import '../../pages/orders/order_list_page.dart' // TableColorManager のあるファイルを正しく import
-    show TableColorManager;
+import '../../pages/orders/order_list_page.dart'
+    show TableColorManager; // TableColorManager を使う
 
 enum OrderFilter {
   all('すべて'),
@@ -164,18 +164,15 @@ class _TableBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // テーブルカラー
     return FutureBuilder<Color>(
       future: TableColorManager.getTableColor(tableName),
       builder: (context, snapshot) {
         final tableColor = snapshot.data ?? TableColorManager.defaultColor;
 
-        // テーブル状態/合計など
         final tableStatus = _getTableStatus(orders);
         final tableTotal = _calculateTableTotal(orders);
         final orderWidgets = _buildOrderWidgets(orders);
 
-        // Container + 左側カラーライン
         return Container(
           margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
           decoration: BoxDecoration(
@@ -184,13 +181,15 @@ class _TableBlock extends StatelessWidget {
             border: Border(left: BorderSide(width: 20, color: tableColor)),
           ),
           child: ExpansionTile(
-            tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            tilePadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             title: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
                   tableName,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  style:
+                  const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 _TableStatusBadge(tableStatus),
               ],
@@ -202,7 +201,8 @@ class _TableBlock extends StatelessWidget {
               // 合計表示
               Container(
                 alignment: Alignment.centerRight,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Text(
                   '合計: ¥${tableTotal.toStringAsFixed(0)}',
                   style: const TextStyle(
@@ -214,23 +214,22 @@ class _TableBlock extends StatelessWidget {
 
               // 会計 & リセットボタン
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   children: [
                     // 会計に進む
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () async {
-                          // ★ ここで "未提供" かどうかを判定して、_simulatePayment に渡す
                           final hasUnprovided = (tableStatus == 'unprovided');
-
                           final success = await _simulatePayment(
                             context,
                             tableTotal,
-                            hasUnprovided: hasUnprovided, // ← 追加
+                            hasUnprovided: hasUnprovided,
                           );
                           if (success) {
-                            // 成功 → payment_historyへ書き込み & リセット
+                            // 決済履歴追加 & リセット
                             try {
                               await supabase.from('payment_history').insert({
                                 'table_name': tableName,
@@ -289,7 +288,6 @@ class _TableBlock extends StatelessWidget {
     );
   }
 
-  /// ボタンスタイル
   ButtonStyle _buttonStyle() {
     return ElevatedButton.styleFrom(
       backgroundColor: Colors.blueAccent,
@@ -302,14 +300,11 @@ class _TableBlock extends StatelessWidget {
     );
   }
 
-  /// (疑似)決済処理ダイアログ
-  /// ★ hasUnprovided引数を追加して、赤文字の警告を表示する
   Future<bool> _simulatePayment(
       BuildContext context,
       double total, {
         required bool hasUnprovided,
       }) async {
-    // ダイアログで「金額」と「未提供警告」を表示
     final result = await showDialog<bool>(
       context: context,
       builder: (c) {
@@ -321,7 +316,6 @@ class _TableBlock extends StatelessWidget {
               Text('¥${total.toStringAsFixed(0)} を決済します。\n結果を選択してください。'),
               const SizedBox(height: 8),
               if (hasUnprovided) ...[
-                // ★ 赤文字で注意喚起
                 const Text(
                   '※未提供商品が残っています。',
                   style: TextStyle(color: Colors.redAccent),
@@ -344,11 +338,9 @@ class _TableBlock extends StatelessWidget {
       },
     );
 
-    // resultがtrueなら「成功」
     return result == true;
   }
 
-  /// テーブルリセット
   Future<void> _resetTable(String tableName, BuildContext context) async {
     try {
       await supabase.rpc('reset_table', params: {
@@ -370,7 +362,6 @@ class _TableBlock extends StatelessWidget {
     }
   }
 
-  /// テーブルのステータス (未提供あり / 全提供済み)
   String _getTableStatus(List<Map<String, dynamic>> orders) {
     for (var o in orders) {
       final items = o['items'] as List<dynamic>? ?? [];
@@ -381,7 +372,6 @@ class _TableBlock extends StatelessWidget {
     return 'provided';
   }
 
-  /// 合計金額
   double _calculateTableTotal(List<Map<String, dynamic>> orders) {
     double sum = 0;
     for (final o in orders) {
@@ -423,7 +413,6 @@ class _TableBlock extends StatelessWidget {
   }
 }
 
-/// テーブルステータスバッジ
 class _TableStatusBadge extends StatelessWidget {
   final String status;
   const _TableStatusBadge(this.status);
@@ -448,7 +437,6 @@ class _TableStatusBadge extends StatelessWidget {
   }
 }
 
-/// オーダーブロック (1つの orders レコード)
 class _OrderBlock extends StatelessWidget {
   final Map<String, dynamic> orderData;
   final String orderLabel;
@@ -509,7 +497,6 @@ class _OrderBlock extends StatelessWidget {
       final qty = (item['quantity'] as int?) ?? 0;
       final status = item['status'] as String? ?? 'unprovided';
       final price = (item['price'] as num?)?.toDouble() ?? 0.0;
-
       final isCanceled = (status == 'canceled');
       final subTotal = price * qty * (isCanceled ? -1 : 1);
       final subTotalText = isCanceled

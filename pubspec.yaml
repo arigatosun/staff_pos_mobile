@@ -35,6 +35,9 @@ dependencies:
   # ★ 追加：ローカル通知プラグイン
   flutter_local_notifications: ^18.0.1
 
+
+  flutter_colorpicker: ^1.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

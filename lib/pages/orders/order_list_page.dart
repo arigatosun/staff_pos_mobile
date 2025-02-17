@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:convert'; // ★ JSONデコード用
-import 'dart:io' show Platform; // ★ Platform判定用
+import 'dart:convert'; // JSONデコード用
+import 'dart:io' show Platform; // Platform判定用
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // ★ 追加
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -12,7 +12,8 @@ import '../../services/supabase_manager.dart';
 
 /// テーブルカラー管理クラス:
 /// - 20色のプリセットを持つ
-/// - Supabase上の `table_colors` テーブルと同期する
+/// - Supabase上の `table_colors` テーブルと同期
+/// - hex_color カラムがあればそちらを優先
 class TableColorManager {
   static const List<Color> presetColors = [
     Color(0xFF1E88E5),  // 青
@@ -38,7 +39,12 @@ class TableColorManager {
   ];
 
   static const Color defaultColor = Color(0xFF9E9E9E);
+
+  // tableName -> color_index
   static final Map<String, int> _tableColorMap = {};
+  // tableName -> hex_color
+  static final Map<String, String> _tableHexColorMap = {};
+
   static bool _isLoaded = false;
 
   static Future<void> loadTableColorsFromSupabase() async {
@@ -46,17 +52,21 @@ class TableColorManager {
     try {
       final response = await supabase
           .from('table_colors')
-          .select('table_name,color_index');
+          .select('table_name,color_index,hex_color');
       if (response is List) {
         for (final row in response) {
           final name = row['table_name'] as String;
           final idx = row['color_index'] as int;
+          final hex = row['hex_color'] as String?;
           _tableColorMap[name] = idx;
+          if (hex != null) {
+            _tableHexColorMap[name] = hex;
+          }
         }
       }
       _isLoaded = true;
       debugPrint('TableColorManager: Loaded ${_tableColorMap.length} entries.');
-    } catch (error, stack) {
+    } catch (error) {
       debugPrint('loadTableColorsFromSupabase error: $error');
     }
   }
@@ -65,6 +75,18 @@ class TableColorManager {
     if (!_isLoaded) {
       await loadTableColorsFromSupabase();
     }
+
+    // 1) hex_color があればそれを優先
+    final hexColor = _tableHexColorMap[tableName];
+    if (hexColor != null && hexColor.isNotEmpty) {
+      try {
+        return _parseHexColor(hexColor);
+      } catch (_) {
+        // parse失敗時は fallback で color_index を見る
+      }
+    }
+
+    // 2) color_index を見る
     final existingIdx = _tableColorMap[tableName];
     if (existingIdx != null &&
         existingIdx >= 0 &&
@@ -72,7 +94,7 @@ class TableColorManager {
       return presetColors[existingIdx];
     }
 
-    // 新規割り当て
+    // 3) 新規割り当て(従来のロジック)
     final newIndex = _findUnusedColorIndex();
     if (newIndex == null) {
       debugPrint('No more preset colors available. Using defaultColor.');
@@ -82,15 +104,6 @@ class TableColorManager {
     _tableColorMap[tableName] = newIndex;
     await _saveNewColorMapping(tableName, newIndex);
     return presetColors[newIndex];
-  }
-
-  static int? _findUnusedColorIndex() {
-    for (int i = 0; i < presetColors.length; i++) {
-      if (!_tableColorMap.values.contains(i)) {
-        return i;
-      }
-    }
-    return null;
   }
 
   static Future<void> _saveNewColorMapping(String tableName, int colorIndex) async {
@@ -105,6 +118,20 @@ class TableColorManager {
     } catch (e) {
       debugPrint('Failed to insert table_colors: $e');
     }
+  }
+
+  static int? _findUnusedColorIndex() {
+    for (int i = 0; i < presetColors.length; i++) {
+      if (!_tableColorMap.values.contains(i)) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  static Color _parseHexColor(String hexColor) {
+    // 例: "#FFFFFFFF" -> int.parse("FFFFFFFF",16) -> 0xFFFFFFFF
+    return Color(int.parse(hexColor.substring(1), radix: 16));
   }
 }
 
@@ -143,14 +170,20 @@ class _OrderListPageState extends State<OrderListPage>
 
   Timer? _timer; // 1分おきに再描画
 
+  // ★ 遅延表示用の設定
+  bool _delayOn = true;
+  int _t1 = 10;
+  int _t2 = 40;
+  int _t3 = 60;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: _tabs.length, vsync: this);
 
-    // ★ 通知の初期化を追加
-    _initializeNotifications();
+    _loadStoreSettings(); // ← store_settings から遅延設定を読み込み
 
+    _initializeNotifications();
     _initializeDeviceInfo();
     _setupFCM();
     FirebaseMessaging.instance.onTokenRefresh.listen(_updateFCMToken);
@@ -168,6 +201,28 @@ class _OrderListPageState extends State<OrderListPage>
 
     // テーブルカラーの初期ロード
     TableColorManager.loadTableColorsFromSupabase();
+  }
+
+  Future<void> _loadStoreSettings() async {
+    try {
+      // 単店舗用: store_settings を1レコードだけ取得
+      final res = await supabase
+          .from('store_settings')
+          .select()
+          .limit(1)
+          .maybeSingle();
+
+      if (res != null) {
+        setState(() {
+          _delayOn = res['is_delay_highlight_on'] as bool? ?? true;
+          _t1 = res['delay_threshold1'] as int? ?? 10;
+          _t2 = res['delay_threshold2'] as int? ?? 40;
+          _t3 = res['delay_threshold3'] as int? ?? 60;
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to load store_settings: $e');
+    }
   }
 
   @override
@@ -228,7 +283,6 @@ class _OrderListPageState extends State<OrderListPage>
       final payload = details.payload;
       if (payload != null) {
         final data = json.decode(payload);
-        // ここで特定の画面への遷移やデータ処理を行う
         print('Notification tapped with payload: $data');
       }
     } catch (e) {
@@ -341,7 +395,6 @@ class _OrderListPageState extends State<OrderListPage>
           presentAlert: true,
           presentBadge: true,
           presentSound: true,
-          // iOS 側に組み込み済みのサウンドファイル名 (拡張子不要 / または .caf 等)
           sound: 'notification_sound.mp3',
         ),
       ),
@@ -466,23 +519,15 @@ class _OrderListPageState extends State<OrderListPage>
     return result;
   }
 
-  /// 未提供で10分以上 => 遅延扱い
-  int _calcDelayMinutes(_ItemData item) {
-    if (item.status != 'unprovided') return -1;
-    final diff = _elapsedMinutes(item.createdAt);
-    return diff >= 10 ? diff : -1;
-  }
-
   void _sortItems(List<_ItemData> items) {
     items.sort((a, b) {
+      // 遅延大きい順(=実装時に現在は _calcDelayMinutes を使っていたが省略)
       final delayA = _calcDelayMinutes(a);
       final delayB = _calcDelayMinutes(b);
-
-      // 遅延大きい順
       final compareDelay = delayB.compareTo(delayA);
       if (compareDelay != 0) return compareDelay;
 
-      // 作成日時 (古い or 新着)
+      // 作成日時
       final localA = _parseNaiveTimestampAsUtc(a.createdAt).toLocal();
       final localB = _parseNaiveTimestampAsUtc(b.createdAt).toLocal();
 
@@ -494,12 +539,17 @@ class _OrderListPageState extends State<OrderListPage>
     });
   }
 
+  int _calcDelayMinutes(_ItemData item) {
+    if (item.status != 'unprovided') return -1;
+    return _elapsedMinutes(item.createdAt);
+  }
+
   DateTime _parseNaiveTimestampAsUtc(String timeStr) {
     if (timeStr.isEmpty) {
       return DateTime.now();
     }
     final naive = DateTime.parse(timeStr);
-    final dtUtc = DateTime.utc(
+    return DateTime.utc(
       naive.year,
       naive.month,
       naive.day,
@@ -509,7 +559,6 @@ class _OrderListPageState extends State<OrderListPage>
       naive.millisecond,
       naive.microsecond,
     );
-    return dtUtc;
   }
 
   int _elapsedMinutes(String? createdAtStr) {
@@ -541,11 +590,6 @@ class _OrderListPageState extends State<OrderListPage>
     });
   }
 
-  Future<Color> _getTableColor(String tableName) async {
-    return TableColorManager.getTableColor(tableName);
-  }
-
-  // ---------------- UI ----------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -583,8 +627,7 @@ class _OrderListPageState extends State<OrderListPage>
         bottom: TabBar(
           controller: _tabController,
           isScrollable: false,
-          labelStyle:
-          const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+          labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
           labelColor: Colors.white,
           unselectedLabelColor: Colors.white70,
           indicator: const UnderlineTabIndicator(
@@ -625,7 +668,7 @@ class _OrderListPageState extends State<OrderListPage>
                 itemBuilder: (ctx, i) {
                   final item = filtered[i];
                   return FutureBuilder<Color>(
-                    future: _getTableColor(item.tableName),
+                    future: TableColorManager.getTableColor(item.tableName),
                     builder: (context, snapColor) {
                       final color =
                           snapColor.data ?? TableColorManager.defaultColor;
@@ -641,7 +684,7 @@ class _OrderListPageState extends State<OrderListPage>
     );
   }
 
-  /// スワイプ操作 (未提供→提供済 or キャンセル など)
+  /// スワイプ操作 (未提供→提供済 or キャンセル等)
   Widget _buildDismissible(_ItemData item, Color tableColor) {
     final keyVal = ValueKey('${item.orderId}_${item.itemIndex}_${item.status}');
     final isUnprovided = item.status == 'unprovided';
@@ -649,8 +692,7 @@ class _OrderListPageState extends State<OrderListPage>
     final isProvided = item.status == 'provided';
 
     final canSwipe = isUnprovided || isCanceled || isProvided;
-    final direction =
-    canSwipe ? DismissDirection.horizontal : DismissDirection.none;
+    final direction = canSwipe ? DismissDirection.horizontal : DismissDirection.none;
 
     return Dismissible(
       key: keyVal,
@@ -758,7 +800,14 @@ class _OrderListPageState extends State<OrderListPage>
       },
       background: _buildSwipeBackground(item, isStartToEnd: true),
       secondaryBackground: _buildSwipeBackground(item, isStartToEnd: false),
-      child: _OrderCard(itemData: item, tableColor: tableColor),
+      child: _OrderCard(
+        itemData: item,
+        tableColor: tableColor,
+        delayOn: _delayOn,
+        t1: _t1,
+        t2: _t2,
+        t3: _t3,
+      ),
     );
   }
 
@@ -769,7 +818,6 @@ class _OrderListPageState extends State<OrderListPage>
 
     if (isStartToEnd) {
       if (isUnprovided) {
-        // 右 => 提供済
         return Container(
           color: Colors.green,
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -780,13 +828,11 @@ class _OrderListPageState extends State<OrderListPage>
               Icon(Icons.check, color: Colors.white),
               SizedBox(width: 8),
               Text("提供済にする",
-                  style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ],
           ),
         );
       } else if (isCanceled || isProvided) {
-        // 右 => 未提供に戻す
         return Container(
           color: Colors.blue,
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -797,14 +843,13 @@ class _OrderListPageState extends State<OrderListPage>
               Icon(Icons.undo, color: Colors.white),
               SizedBox(width: 8),
               Text("未提供に戻す",
-                  style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ],
           ),
         );
       }
     } else {
-      // 左 => キャンセル or 未提供に戻す
+      // 左へのスワイプ
       if (isUnprovided) {
         return Container(
           color: Colors.red,
@@ -816,8 +861,7 @@ class _OrderListPageState extends State<OrderListPage>
               Icon(Icons.cancel_outlined, color: Colors.white),
               SizedBox(width: 8),
               Text("キャンセル",
-                  style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ],
           ),
         );
@@ -832,8 +876,7 @@ class _OrderListPageState extends State<OrderListPage>
               Icon(Icons.undo, color: Colors.white),
               SizedBox(width: 8),
               Text("未提供に戻す",
-                  style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ],
           ),
         );
@@ -846,7 +889,7 @@ class _OrderListPageState extends State<OrderListPage>
 class _ItemData {
   final String orderId;
   final String tableName;
-  final String createdAt; // DBにはUTCとして保存されている想定
+  final String createdAt; // UTC保存想定
   final int itemIndex;
   final String itemName;
   final int quantity;
@@ -867,21 +910,36 @@ class _OrderCard extends StatelessWidget {
   final _ItemData itemData;
   final Color tableColor;
 
+  // 遅延設定
+  final bool delayOn;
+  final int t1;
+  final int t2;
+  final int t3;
+
   const _OrderCard({
     Key? key,
     required this.itemData,
     required this.tableColor,
+    required this.delayOn,
+    required this.t1,
+    required this.t2,
+    required this.t3,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     final diffMin = _elapsedMinutes(itemData.createdAt);
 
+    // デフォルトは白
     Color bgColor = Colors.white;
-    if (itemData.status == 'unprovided') {
-      if (diffMin >= 40) {
+
+    // 遅延表示ON && 未提供アイテム なら色を変える
+    if (delayOn && itemData.status == 'unprovided') {
+      if (diffMin >= t3) {
         bgColor = Colors.orange[400]!;
-      } else if (diffMin >= 10) {
+      } else if (diffMin >= t2) {
+        bgColor = Colors.orange[200]!;
+      } else if (diffMin >= t1) {
         bgColor = Colors.orange[100]!;
       }
     }
