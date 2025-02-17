@@ -2,9 +2,14 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'pages/home_page.dart';
 
-// ★ 追加: FlutterFire CLI で生成されたファイルをimport
+// 日付フォーマットのロケールデータを初期化
+import 'package:intl/date_symbol_data_local.dart';
+
+// ★ 追加: ローカライズのため
+import 'package:flutter_localizations/flutter_localizations.dart';
+
+import 'pages/home_page.dart';
 import 'firebase_options.dart';
 
 /// バックグラウンドメッセージを受信する際に呼ばれるハンドラ.
@@ -39,7 +44,10 @@ Future<void> main() async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
 
-    // ★ Firebase初期化: 新たに options を指定
+    // "ja_JP" のロケールデータを初期化
+    await initializeDateFormatting('ja_JP');
+
+    // Firebase初期化
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
@@ -64,7 +72,7 @@ Future<void> main() async {
       print('iOS specific settings configured');
     }
 
-    // FCMトークンの取得（複数回試行）
+    // FCMトークンの取得（最大3回試行）
     String? token;
     for (int i = 0; i < 3; i++) {
       token = await getFCMToken();
@@ -139,6 +147,17 @@ class MyApp extends StatelessWidget {
           elevation: 2,
         ),
       ),
+      // ★ ローカライズのデリゲートを追加
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('en', ''), // 英語
+        Locale('ja', ''), // 日本語
+      ],
+
       home: const HomePage(),
     );
   }

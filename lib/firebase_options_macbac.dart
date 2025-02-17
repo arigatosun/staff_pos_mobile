@@ -24,12 +24,12 @@ class DefaultFirebaseOptions {
     }
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
-        return android;
-      case TargetPlatform.iOS:
         throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for ios - '
+          'DefaultFirebaseOptions have not been configured for android - '
           'you can reconfigure this by running the FlutterFire CLI again.',
         );
+      case TargetPlatform.iOS:
+        return ios;
       case TargetPlatform.macOS:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for macos - '
@@ -52,11 +52,13 @@ class DefaultFirebaseOptions {
     }
   }
 
-  static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyB2Ia05VVolX29PlOpxLTaSQipkfDvi020',
-    appId: '1:863445551836:android:85f1a7d2e4e7a655268219',
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyBCw9coQF_rilVXbEORPiSIxuMDOH-pLFc',
+    appId: '1:863445551836:ios:89c1c6e5af52544d268219',
     messagingSenderId: '863445551836',
     projectId: 'staff-pos-mobile',
     storageBucket: 'staff-pos-mobile.firebasestorage.app',
+    iosBundleId: 'jp.staff.posapp',
   );
+
 }

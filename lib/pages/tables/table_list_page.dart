@@ -1,9 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../services/supabase_manager.dart';
 import '../../widgets/empty_orders_view.dart';
 
-import '../../pages/orders/order_list_page.dart' // TableColorManager のあるファイルを正しく import
-    show TableColorManager;
+// order_list_page.dart に定義した TableColorManager を import
+import '../../pages/orders/order_list_page.dart' show TableColorManager;
 
 enum OrderFilter {
   all('すべて'),
@@ -23,15 +24,40 @@ class TableListPage extends StatefulWidget {
 
 class _TableListPageState extends State<TableListPage> {
   late final Stream<List<Map<String, dynamic>>> _ordersStream;
+
+  // table_colors購読用
+  StreamSubscription<List<Map<String, dynamic>>>? _tableColorStreamSub;
+
   OrderFilter _selectedFilter = OrderFilter.all;
 
   @override
   void initState() {
     super.initState();
+
+    // ordersテーブルを監視
     _ordersStream = supabase
         .from('orders')
         .stream(primaryKey: ['id'])
         .order('created_at', ascending: false);
+
+
+    // (2) table_colors を購読してリアルタイムで反映
+    _tableColorStreamSub = supabase
+        .from('table_colors')
+        .stream(primaryKey: ['id'])
+        .listen((rows) {
+      // 取得したテーブルカラー情報を更新
+      TableColorManager.updateTableColors(rows);
+      // 画面を再描画 (同期メソッドで色を取得するためsetStateで再描画すればOK)
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    // 購読の解除
+    _tableColorStreamSub?.cancel();
+    super.dispose();
   }
 
   @override
@@ -126,8 +152,7 @@ class _TableListPageState extends State<TableListPage> {
 
     return orders.where((o) {
       final items = o['items'] as List<dynamic>? ?? [];
-      final hasUnprovided =
-      items.any((i) => (i as Map)['status'] == 'unprovided');
+      final hasUnprovided = items.any((i) => (i as Map)['status'] == 'unprovided');
       if (_selectedFilter == OrderFilter.hasUnprovided) {
         return hasUnprovided;
       } else {
@@ -164,128 +189,125 @@ class _TableBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // テーブルカラー
-    return FutureBuilder<Color>(
-      future: TableColorManager.getTableColor(tableName),
-      builder: (context, snapshot) {
-        final tableColor = snapshot.data ?? TableColorManager.defaultColor;
+    // ★ FutureBuilderではなく、同期メソッドでテーブルカラーを取得
+    final tableColor = TableColorManager.getTableColor(tableName);
 
-        // テーブル状態/合計など
-        final tableStatus = _getTableStatus(orders);
-        final tableTotal = _calculateTableTotal(orders);
-        final orderWidgets = _buildOrderWidgets(orders);
+    // テーブル状態/合計など
+    final tableStatus = _getTableStatus(orders);
+    final tableTotal = _calculateTableTotal(orders);
+    final orderWidgets = _buildOrderWidgets(orders);
 
-        // Container + 左側カラーライン
-        return Container(
-          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-          decoration: BoxDecoration(
-            color: Colors.grey[50],
-            borderRadius: BorderRadius.circular(8),
-            border: Border(left: BorderSide(width: 20, color: tableColor)),
-          ),
-          child: ExpansionTile(
-            tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            title: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  tableName,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                _TableStatusBadge(tableStatus),
-              ],
+    // 左側にカラーラインを入れたカード
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(8),
+        border: Border(left: BorderSide(width: 20, color: tableColor)),
+      ),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              tableName,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-            children: [
-              // オーダー一覧
-              ...orderWidgets,
+            _TableStatusBadge(tableStatus),
+          ],
+        ),
+        children: [
+          // オーダー一覧
+          ...orderWidgets,
 
-              // 合計表示
-              Container(
-                alignment: Alignment.centerRight,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text(
-                  '合計: ¥${tableTotal.toStringAsFixed(0)}',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+          // 合計表示
+          Container(
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Text(
+              '合計: ¥${tableTotal.toStringAsFixed(0)}',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+
+          // 会計 & リセットボタン
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                // 会計に進む
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      final hasUnprovided = (tableStatus == 'unprovided');
+
+                      final success = await _simulatePayment(
+                        context,
+                        tableTotal,
+                        hasUnprovided: hasUnprovided,
+                      );
+                      if (success) {
+                        // 決済成功 → payment_history へ書き込み & リセット
+                        try {
+                          await supabase.from('payment_history').insert({
+                            'table_name': tableName,
+                            'amount': tableTotal,
+                          });
+                        } catch (e) {
+                          print('決済履歴の書き込み失敗: $e');
+                        }
+                        await _resetTable(tableName, context);
+                      }
+                    },
+                    style: _buttonStyle(),
+                    child: const Text('会計に進む'),
                   ),
                 ),
-              ),
+                const SizedBox(width: 8),
 
-              // 会計 & リセットボタン
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    // 会計に進む
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          // ★ ここで "未提供" かどうかを判定して、_simulatePayment に渡す
-                          final hasUnprovided = (tableStatus == 'unprovided');
-
-                          final success = await _simulatePayment(
-                            context,
-                            tableTotal,
-                            hasUnprovided: hasUnprovided, // ← 追加
-                          );
-                          if (success) {
-                            // 成功 → payment_historyへ書き込み & リセット
-                            try {
-                              await supabase.from('payment_history').insert({
-                                'table_name': tableName,
-                                'amount': tableTotal,
-                              });
-                            } catch (e) {
-                              print('決済履歴の書き込み失敗: $e');
-                            }
-                            await _resetTable(tableName, context);
-                          }
-                        },
-                        style: _buttonStyle(),
-                        child: const Text('会計に進む'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-
-                    // テーブルリセット
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          final confirm = await showDialog<bool>(
-                            context: context,
-                            builder: (c) => AlertDialog(
-                              title: const Text('テーブルリセット'),
-                              content: const Text(
-                                '本当にリセットしますか？\n(注文データがアーカイブされます)',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(c, false),
-                                  child: const Text('キャンセル'),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(c, true),
-                                  child: const Text('OK'),
-                                ),
-                              ],
+                // テーブルリセット
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (c) => AlertDialog(
+                          title: const Text('テーブルリセット'),
+                          content: const Text(
+                            '本当にリセットしますか？\n(注文データがアーカイブされます)',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(c, false),
+                              child: const Text('キャンセル'),
                             ),
-                          );
-                          if (confirm == true) {
-                            await _resetTable(tableName, context);
-                          }
-                        },
-                        style: _buttonStyle(),
-                        child: const Text('テーブルリセット'),
-                      ),
-                    ),
-                  ],
+                            TextButton(
+                              onPressed: () => Navigator.pop(c, true),
+                              child: const Text('OK'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) {
+                        await _resetTable(tableName, context);
+                      }
+                    },
+                    style: _buttonStyle(),
+                    child: const Text('テーブルリセット'),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
@@ -303,13 +325,11 @@ class _TableBlock extends StatelessWidget {
   }
 
   /// (疑似)決済処理ダイアログ
-  /// ★ hasUnprovided引数を追加して、赤文字の警告を表示する
   Future<bool> _simulatePayment(
       BuildContext context,
       double total, {
         required bool hasUnprovided,
       }) async {
-    // ダイアログで「金額」と「未提供警告」を表示
     final result = await showDialog<bool>(
       context: context,
       builder: (c) {
@@ -321,7 +341,6 @@ class _TableBlock extends StatelessWidget {
               Text('¥${total.toStringAsFixed(0)} を決済します。\n結果を選択してください。'),
               const SizedBox(height: 8),
               if (hasUnprovided) ...[
-                // ★ 赤文字で注意喚起
                 const Text(
                   '※未提供商品が残っています。',
                   style: TextStyle(color: Colors.redAccent),
@@ -343,18 +362,15 @@ class _TableBlock extends StatelessWidget {
         );
       },
     );
-
-    // resultがtrueなら「成功」
-    return result == true;
+    return (result == true);
   }
 
-  /// テーブルリセット
+  /// テーブルリセット (orders のデータをアーカイブ or 削除)
   Future<void> _resetTable(String tableName, BuildContext context) async {
     try {
       await supabase.rpc('reset_table', params: {
         'p_table_name': tableName,
       });
-
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('$tableName をリセットしました(アーカイブ済み)')),
@@ -393,6 +409,7 @@ class _TableBlock extends StatelessWidget {
         final status = itemMap['status'] as String? ?? 'unprovided';
 
         if (status == 'canceled') {
+          // キャンセルはマイナス
           sum -= price * qty;
         } else {
           sum += price * qty;
@@ -403,6 +420,7 @@ class _TableBlock extends StatelessWidget {
   }
 
   List<Widget> _buildOrderWidgets(List<Map<String, dynamic>> orders) {
+    // 日時順ソート（古い順）
     final sorted = [...orders];
     sorted.sort((a, b) {
       final tA = a['created_at'] as String? ?? '';
@@ -413,7 +431,8 @@ class _TableBlock extends StatelessWidget {
     final widgets = <Widget>[];
     for (var i = 0; i < sorted.length; i++) {
       final order = sorted[i];
-      final label = (i == 0) ? "初回オーダー" : "追加オーダー-$i";
+      final label = (i == 0) ? "初回オーダー" : "追加オーダー$i";
+
       widgets.add(_OrderBlock(
         orderData: order,
         orderLabel: label,
@@ -423,7 +442,6 @@ class _TableBlock extends StatelessWidget {
   }
 }
 
-/// テーブルステータスバッジ
 class _TableStatusBadge extends StatelessWidget {
   final String status;
   const _TableStatusBadge(this.status);
@@ -448,7 +466,6 @@ class _TableStatusBadge extends StatelessWidget {
   }
 }
 
-/// オーダーブロック (1つの orders レコード)
 class _OrderBlock extends StatelessWidget {
   final Map<String, dynamic> orderData;
   final String orderLabel;
@@ -488,8 +505,7 @@ class _OrderBlock extends StatelessWidget {
     if (items.isEmpty) return const SizedBox();
 
     final rows = <TableRow>[];
-
-    // Header
+    // ヘッダ行
     rows.add(
       TableRow(
         decoration: BoxDecoration(color: Colors.grey[200]),
@@ -502,7 +518,7 @@ class _OrderBlock extends StatelessWidget {
       ),
     );
 
-    // Body
+    // 明細行
     for (var i = 0; i < items.length; i++) {
       final item = items[i] as Map<String, dynamic>;
       final name = item['name'] as String? ?? '';
@@ -584,7 +600,6 @@ class _OrderBlock extends StatelessWidget {
   Widget _buildStatusLabel(String status) {
     String label;
     Color bgColor;
-
     switch (status) {
       case 'unprovided':
         label = '未提供';

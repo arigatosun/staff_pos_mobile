@@ -11,16 +11,21 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # ★ ローカライズ（翻訳）用に追加
+  flutter_localizations:
+    sdk: flutter
+
   cupertino_icons: ^1.0.8
   supabase_flutter: ^2.8.3
+  flutter_colorpicker: ^1.0.3
 
-  # Firebaseパッケージ
+  # Firebase関連パッケージ
   firebase_core: ^2.24.2
   firebase_messaging: ^14.7.10
 
   audioplayers: ^6.1.1
   device_info_plus: ^11.2.2
-  intl: ^0.18.0
+  intl: ^0.19.0
 
   # iOS対応のために追加
   platform: ^3.1.4
@@ -32,7 +37,7 @@ dependencies:
   # アプリケーションの状態管理用(例)
   provider: ^6.1.1
 
-  # ★ 追加：ローカル通知プラグイン
+  # ローカル通知
   flutter_local_notifications: ^18.0.1
 
 dev_dependencies:

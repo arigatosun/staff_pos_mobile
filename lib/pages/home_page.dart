@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:staff_pos_app/pages/orders/order_list_page.dart';
 import 'package:staff_pos_app/pages/tables/table_list_page.dart';
 import 'package:staff_pos_app/pages/history/payment_history_page.dart';
+import 'package:staff_pos_app/pages/settings/settings_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -15,12 +16,14 @@ class _HomePageState extends State<HomePage> {
 
   // 表示するページをリスト管理
   final List<Widget> _pages = const [
-    // 1) 新しい「注文管理ページ（キッチンオーダー画面）」
+    // 1) 注文管理ページ（キッチンオーダー画面）
     OrderListPage(),
-    // 2) 現在の「テーブル管理ページ」(旧: order_list_page のテーブル分割表示を移植)
+    // 2) テーブル管理ページ
     TableListPage(),
     // 3) 会計履歴ページ
     PaymentHistoryPage(),
+    // 4) 設定ページ
+    SettingsPage(),
   ];
 
   // ボトムナビゲーションのタップ時に呼ばれる
@@ -33,12 +36,16 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // AppBarを削除しているため、画面上部には何も表示されません
+      // 既存同様、AppBarは削除し全画面を切り替える
       body: _pages[_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
+        // ★ ここを追加
+        type: BottomNavigationBarType.fixed,
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
         selectedItemColor: Colors.teal,
+        // ★ すべての項目にラベルを表示したい場合
+        showUnselectedLabels: true,
         items: const [
           BottomNavigationBarItem(
             icon: Icon(Icons.list),
@@ -51,6 +58,10 @@ class _HomePageState extends State<HomePage> {
           BottomNavigationBarItem(
             icon: Icon(Icons.history),
             label: '会計履歴',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings),
+            label: '設定',
           ),
         ],
       ),
