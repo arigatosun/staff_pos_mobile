@@ -44,6 +44,34 @@ Future<String?> getFCMToken() async {
   }
 }
 
+// FCMトークンをSupabaseに保存する関数
+Future<void> saveFCMTokenToSupabase(String token, String deviceName) async {
+  try {
+    // 既存のトークンを確認
+    final existingDevices = await supabase
+        .from('pos_devices')
+        .select()
+        .eq('fcm_token', token);
+
+    // トークンが存在しない場合は新規追加
+    if (existingDevices.isEmpty) {
+      final result = await supabase.from('pos_devices').insert({
+        'device_name': deviceName,
+        'fcm_token': token,
+      }).select();
+      print('FCMトークンをSupabaseに保存しました: $result');
+    } else {
+      print('FCMトークンは既にSupabaseに存在します');
+    }
+  } catch (e) {
+    print('FCMトークン保存エラー: $e');
+    if (e is PostgrestException) {
+      print('PostgrestException: ${e.message}');
+      print('詳細: ${e.details}');
+    }
+  }
+}
+
 // 軽量なSupabase接続テスト - 改良版
 Future<void> testSupabase() async {
   try {
@@ -71,26 +99,6 @@ Future<void> testSupabase() async {
   }
 }
 
-// Supabaseの初期化専用関数
-Future<void> initializeSupabase() async {
-  try {
-    print('Supabase初期化を開始します...');
-
-    // URLとAPIキーを直接指定して初期化
-    await Supabase.initialize(
-      url: 'https://bwjvwohxwjbztaawcyxw.supabase.co',
-      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ3anZ3b2h4d2pienRhYXdjeXh3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTA5MDIwNTksImV4cCI6MjAyNjQ3ODA1OX0.FEjg5lpYEQYzJA_JfH_2Q1Dx8gBExoO97ch2JYE_bRw',
-      // 接続タイムアウトの設定
-
-    );
-
-    print('✅ Supabase初期化成功');
-  } catch (e) {
-    print('❌ Supabase初期化エラー: $e');
-    print('詳細エラー情報: ${e.toString()}');
-  }
-}
-
 Future<void> main() async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
@@ -104,8 +112,10 @@ Future<void> main() async {
     );
     print('Firebase initialized successfully');
 
-    // Supabaseを初期化してから接続テストを行う
-    await initializeSupabase();
+    // SupabaseManagerを使用して初期化
+    print('Supabase初期化を開始します...');
+    await SupabaseManager.initialize();
+    print('✅ Supabase初期化成功');
 
     // 少し待機してから接続テスト
     await Future.delayed(const Duration(milliseconds: 500));
@@ -134,13 +144,18 @@ Future<void> main() async {
     String? token;
     for (int i = 0; i < 3; i++) {
       token = await getFCMToken();
-      if (token != null) break;
+      if (token != null) {
+        // FCMトークンをSupabaseに保存
+        await saveFCMTokenToSupabase(token, 'Android Device ${DateTime.now().millisecondsSinceEpoch}');
+        break;
+      }
       await Future.delayed(const Duration(seconds: 2));
     }
 
     // トークン更新時のハンドラー
     FirebaseMessaging.instance.onTokenRefresh.listen((token) {
       print('FCM Token refreshed: $token');
+      saveFCMTokenToSupabase(token, 'Android Device (更新) ${DateTime.now().millisecondsSinceEpoch}');
     });
 
     // バックグラウンドメッセージハンドラーの登録
