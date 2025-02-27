@@ -7,21 +7,16 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:intl/intl.dart';
-
-// ★ v2 系の Supabase 型定義
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/supabase_manager.dart';
 
 /// ---------------------------------------------------------
-/// TableColorManager (リアルタイム更新に対応するよう修正)
+/// TableColorManager
 /// ---------------------------------------------------------
 class TableColorManager {
-  static final Map<String, String> _tableColorMap = {}; // table_name -> hex_color
+  static final Map<String, String> _tableColorMap = {};
   static const defaultHex = '#FF9E9E9E';
 
-  /// Supabaseから受け取った最新のrows(List<Map>)をもとにローカルマップを更新
   static void updateTableColors(List<Map<String, dynamic>> rows) {
     _tableColorMap.clear();
     for (final row in rows) {
@@ -34,13 +29,11 @@ class TableColorManager {
     debugPrint('TableColorManager: updated (count=${_tableColorMap.length})');
   }
 
-  /// テーブル名からカラーを取得
   static Color getTableColor(String tableName) {
     final hex = _tableColorMap[tableName] ?? defaultHex;
     return _parseColor(hex) ?? Colors.grey;
   }
 
-  /// Hex (#AARRGGBB) → Color 変換
   static Color? _parseColor(String? hexColor) {
     if (hexColor == null || hexColor.isEmpty) return null;
     try {
@@ -55,7 +48,8 @@ class TableColorManager {
 /// OrderListPage
 /// ---------------------------------------------------------
 class OrderListPage extends StatefulWidget {
-  const OrderListPage({Key? key}) : super(key: key);
+  final int storeId; // ★ 追加
+  const OrderListPage({super.key, required this.storeId});
 
   @override
   State<OrderListPage> createState() => _OrderListPageState();
@@ -85,13 +79,12 @@ class _OrderListPageState extends State<OrderListPage>
   String _sortMethod = 'oldest'; // or 'newest'
   Timer? _timer; // 1分おきに再描画
 
-  // ---------------------- 遅延表示用の設定値 ----------------------
-  bool _isDelayOn = false; // 遅延表示を有効にするか
-  int _threshold1 = 10;    // しきい値1
-  int _threshold2 = 40;    // しきい値2
-  int _threshold3 = 60;    // しきい値3
+  // 遅延表示設定
+  bool _isDelayOn = false;
+  int _threshold1 = 10;
+  int _threshold2 = 40;
+  int _threshold3 = 60;
 
-  // ---------------------- 追加: table_colors & store_settings 購読用 ----------------------
   StreamSubscription<List<Map<String, dynamic>>>? _tableColorStreamSub;
   StreamSubscription<List<Map<String, dynamic>>>? _storeSettingsStreamSub;
 
@@ -105,29 +98,30 @@ class _OrderListPageState extends State<OrderListPage>
     _setupFCM();
     FirebaseMessaging.instance.onTokenRefresh.listen(_updateFCMToken);
 
-    // ordersをリアルタイム購読
+    // ★ ここで storeId を使用して絞り込み
     _ordersStream = supabase
         .from('orders')
         .stream(primaryKey: ['id'])
+        .eq('store_id', widget.storeId)
         .order('created_at', ascending: false);
 
-    // ---------------------- table_colors を購読してリアルタイム反映 ----------------------
+    // table_colors の購読
     _tableColorStreamSub = supabase
         .from('table_colors')
-        .stream(primaryKey: ['id'])
+        .stream(primaryKey: ['table_name'])
+        .eq('store_id', widget.storeId)
         .listen((rows) {
-      // 取得したテーブルカラー情報を更新
       TableColorManager.updateTableColors(rows);
-      // UI再描画
       if (mounted) setState(() {});
     });
 
-    // ---------------------- store_settings を購読してリアルタイム反映 ----------------------
+    // store_settings の購読
     _storeSettingsStreamSub = supabase
         .from('store_settings')
-        .stream(primaryKey: ['id'])
+        .stream(primaryKey: ['store_id'])
+        .eq('store_id', widget.storeId)
         .listen((rows) {
-      // store_settings は基本1行の想定として、先頭行を参照
+      // 最初の1行を参照 (想定)
       if (rows.isNotEmpty) {
         final row = rows.first;
         _parseStoreSettingsRow(row);
@@ -135,12 +129,12 @@ class _OrderListPageState extends State<OrderListPage>
       }
     });
 
-    // 1分おきに再描画（経過時間のハイライトを更新するため）
+    // 1分おきに再描画
     _timer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
     });
 
-    // 初回起動時に「現在のstore_settings」を取得（DBが空の場合などもあるため）
+    // 初期ロード
     _fetchStoreSettings();
   }
 
@@ -150,38 +144,33 @@ class _OrderListPageState extends State<OrderListPage>
     _timer?.cancel();
     _audioPlayer.dispose();
 
-    // Stream購読を解除
     _tableColorStreamSub?.cancel();
     _storeSettingsStreamSub?.cancel();
 
     super.dispose();
   }
 
-  //----------------------------------------------------------------------------
-  // store_settings の「遅延表示 ON/OFF」「threshold1/2/3」を取得
-  //----------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // store_settings の読み込み
+  // --------------------------------------------------------------------------
   Future<void> _fetchStoreSettings() async {
     try {
-      final PostgrestMap? data = await supabase
+      final result = await supabase
           .from('store_settings')
           .select()
-          .eq('id', '00000000-0000-0000-0000-000000000001')
+          .eq('store_id', widget.storeId)
           .maybeSingle();
 
-      if (data != null) {
-        _parseStoreSettingsRow(data);
+      if (result != null) {
+        _parseStoreSettingsRow(result);
         setState(() {});
       }
-    } on PostgrestException catch (e) {
-      debugPrint('_fetchStoreSettings PostgrestException: ${e.message}');
     } catch (e) {
-      debugPrint('_fetchStoreSettings error: $e');
+      debugPrint('Error fetching store_settings: $e');
     }
   }
 
-  /// store_settingsの行オブジェクトから遅延関連の値をセットする
   void _parseStoreSettingsRow(Map<String, dynamic> data) {
-    // 遅延フラグ
     final rawDelayOn = data['is_delay_highlight_on'];
     if (rawDelayOn is bool) {
       _isDelayOn = rawDelayOn;
@@ -189,7 +178,6 @@ class _OrderListPageState extends State<OrderListPage>
       _isDelayOn = (rawDelayOn.toLowerCase() == 'true');
     }
 
-    // threshold1
     final rawT1 = data['delay_threshold1'];
     if (rawT1 is int) {
       _threshold1 = rawT1;
@@ -200,7 +188,6 @@ class _OrderListPageState extends State<OrderListPage>
       if (parsed != null) _threshold1 = parsed;
     }
 
-    // threshold2
     final rawT2 = data['delay_threshold2'];
     if (rawT2 is int) {
       _threshold2 = rawT2;
@@ -211,7 +198,6 @@ class _OrderListPageState extends State<OrderListPage>
       if (parsed != null) _threshold2 = parsed;
     }
 
-    // threshold3
     final rawT3 = data['delay_threshold3'];
     if (rawT3 is int) {
       _threshold3 = rawT3;
@@ -223,34 +209,29 @@ class _OrderListPageState extends State<OrderListPage>
     }
 
     debugPrint(
-        '[store_settings loaded] isDelayOn=$_isDelayOn '
-            't1=$_threshold1, t2=$_threshold2, t3=$_threshold3'
+      '[store_settings loaded] storeId=${widget.storeId} '
+          'isDelayOn=$_isDelayOn t1=$_threshold1, t2=$_threshold2, t3=$_threshold3',
     );
   }
 
-  //----------------------------------------------------------------------------
-  // 遅延しきい値に応じた色を返す
-  //----------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // 遅延ハイライト色を算出
+  // --------------------------------------------------------------------------
   Color _calcDelayHighlightColor(String status, int diffMin) {
-    // 遅延表示OFF or 「未提供」以外なら白背景で統一
     if (!_isDelayOn || status != 'unprovided') {
       return Colors.white;
     }
     if (diffMin >= _threshold3) {
-      // 3段階目
       return Colors.orange[600]!;
     } else if (diffMin >= _threshold2) {
-      // 2段階目
       return Colors.orange[400]!;
     } else if (diffMin >= _threshold1) {
-      // 1段階目
       return Colors.orange[100]!;
     }
-    // まだしきい値に達していない
     return Colors.white;
   }
 
-  // ---------------------- 通知周りなど従来ロジックは基本そのまま ----------------------
+  // ---------------------- FCM設定 / ローカル通知設定 など ----------------------
   Future<void> _initializeNotifications() async {
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(
@@ -262,12 +243,22 @@ class _OrderListPageState extends State<OrderListPage>
       android: androidSettings,
       iOS: iosSettings,
     );
+
     await _notificationsPlugin.initialize(
       initSettings,
       onDidReceiveNotificationResponse: (details) {
-        _handleNotificationTap(details);
+        try {
+          final payload = details.payload;
+          if (payload != null) {
+            final data = json.decode(payload);
+            print('Notification tapped with payload: $data');
+          }
+        } catch (e) {
+          print('Error handling notification tap: $e');
+        }
       },
     );
+
     if (Platform.isAndroid) {
       const channel = AndroidNotificationChannel(
         'orders',
@@ -285,24 +276,12 @@ class _OrderListPageState extends State<OrderListPage>
     }
   }
 
-  void _handleNotificationTap(NotificationResponse details) {
-    try {
-      final payload = details.payload;
-      if (payload != null) {
-        final data = json.decode(payload);
-        print('Notification tapped with payload: $data');
-      }
-    } catch (e) {
-      print('Error handling notification tap: $e');
-    }
-  }
-
   Future<void> _initializeDeviceInfo() async {
     try {
-      if (Theme.of(context).platform == TargetPlatform.android) {
+      if (Platform.isAndroid) {
         final androidInfo = await _deviceInfo.androidInfo;
         _deviceName = '${androidInfo.brand} ${androidInfo.model}';
-      } else if (Theme.of(context).platform == TargetPlatform.iOS) {
+      } else if (Platform.isIOS) {
         final iosInfo = await _deviceInfo.iosInfo;
         _deviceName = '${iosInfo.name} ${iosInfo.model}';
       }
@@ -319,13 +298,17 @@ class _OrderListPageState extends State<OrderListPage>
         final resp = await supabase.from('pos_devices').insert({
           'device_name': _deviceName ?? 'POS Device',
           'fcm_token': token,
+          // ★ 必要に応じて 'store_id': widget.storeId も保存するなら追加
         }).select().single();
         _currentDeviceId = resp['id'].toString();
       } else {
-        await supabase.from('pos_devices').update({
+        await supabase
+            .from('pos_devices')
+            .update({
           'device_name': _deviceName ?? 'POS Device',
           'fcm_token': token,
-        }).eq('id', _currentDeviceId);
+        })
+            .eq('id', _currentDeviceId);
       }
       _currentFCMToken = token;
       print('FCM token updated: $_currentDeviceId');
@@ -341,7 +324,7 @@ class _OrderListPageState extends State<OrderListPage>
 
   Future<void> _setupFCM() async {
     try {
-      NotificationSettings settings = await _firebaseMessaging.requestPermission(
+      final settings = await _firebaseMessaging.requestPermission(
         alert: true,
         badge: true,
         sound: true,
@@ -423,6 +406,9 @@ class _OrderListPageState extends State<OrderListPage>
     }
   }
 
+  // --------------------------------------------------------------------------
+  // 注文アイテムのステータス更新
+  // --------------------------------------------------------------------------
   Future<void> _updateItemStatus({
     required String orderId,
     required int itemIndex,
@@ -447,26 +433,16 @@ class _OrderListPageState extends State<OrderListPage>
         'status': newStatus,
       };
 
-      try {
-        final result = await supabase
-            .from('orders')
-            .update({'items': items})
-            .eq('id', orderId)
-            .select();
+      final result = await supabase
+          .from('orders')
+          .update({'items': items})
+          .eq('id', orderId)
+          .select();
 
-        if (result is List && result.isNotEmpty) {
-          final updatedRow = result.first;
-          print('ステータス更新成功: $updatedRow');
-        } else {
-          throw Exception('ステータス更新失敗（更新後の行が返らなかった）');
-        }
-      } catch (e) {
-        print('ステータス更新エラー: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('ステータス更新エラー: $e')),
-          );
-        }
+      if (result.isNotEmpty) {
+        print('ステータス更新成功: ${result.first}');
+      } else {
+        throw Exception('ステータス更新失敗');
       }
       print('ステータス更新: order=$orderId, index=$itemIndex => $newStatus');
     } catch (e) {
@@ -479,6 +455,9 @@ class _OrderListPageState extends State<OrderListPage>
     }
   }
 
+  // --------------------------------------------------------------------------
+  // StreamBuilder で受け取った orders を [未提供, 提供済, キャンセル] 用に分解
+  // --------------------------------------------------------------------------
   List<_ItemData> _flattenOrders(List<Map<String, dynamic>> orders) {
     final result = <_ItemData>[];
     for (final o in orders) {
@@ -510,8 +489,7 @@ class _OrderListPageState extends State<OrderListPage>
 
   int _calcDelayMinutes(_ItemData item) {
     if (item.status != 'unprovided') return -1;
-    final diff = _elapsedMinutes(item.createdAt);
-    return diff;
+    return _elapsedMinutes(item.createdAt);
   }
 
   void _sortItems(List<_ItemData> items) {
@@ -522,7 +500,7 @@ class _OrderListPageState extends State<OrderListPage>
       final compareDelay = delayB.compareTo(delayA);
       if (compareDelay != 0) return compareDelay;
 
-      // 作成日時 (古い or 新着)
+      // 作成日時
       final localA = _parseNaiveTimestampAsUtc(a.createdAt).toLocal();
       final localB = _parseNaiveTimestampAsUtc(b.createdAt).toLocal();
 
@@ -539,7 +517,7 @@ class _OrderListPageState extends State<OrderListPage>
       return DateTime.now();
     }
     final naive = DateTime.parse(timeStr);
-    final dtUtc = DateTime.utc(
+    return DateTime.utc(
       naive.year,
       naive.month,
       naive.day,
@@ -549,7 +527,6 @@ class _OrderListPageState extends State<OrderListPage>
       naive.millisecond,
       naive.microsecond,
     );
-    return dtUtc;
   }
 
   int _elapsedMinutes(String? createdAtStr) {
@@ -581,7 +558,9 @@ class _OrderListPageState extends State<OrderListPage>
     });
   }
 
-  // ---------------- UI ----------------
+  // --------------------------------------------------------------------------
+  // UI
+  // --------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -598,12 +577,13 @@ class _OrderListPageState extends State<OrderListPage>
                   value: _isSoundOn,
                   onChanged: (val) => setState(() => _isSoundOn = val),
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  activeTrackColor: Theme.of(context).colorScheme.primary.withOpacity(0.5),
+                  activeTrackColor:
+                  Theme.of(context).colorScheme.primary.withOpacity(0.5),
                   inactiveThumbColor: Colors.white,
                   inactiveTrackColor: Colors.grey[400],
-                  // 以下の2行を追加
-                  overlayColor: MaterialStateProperty.all(Colors.transparent),
-                  trackOutlineColor: MaterialStateProperty.all(Colors.transparent),
+                  overlayColor: WidgetStateProperty.all(Colors.transparent),
+                  trackOutlineColor:
+                  WidgetStateProperty.all(Colors.transparent),
                 ),
               ),
               IconButton(
@@ -647,6 +627,7 @@ class _OrderListPageState extends State<OrderListPage>
 
           final allItems = _flattenOrders(snapshot.data!);
 
+          // タブに応じてフィルタ・ソート
           return TabBarView(
             controller: _tabController,
             children: _tabs.map((tab) {
@@ -657,18 +638,19 @@ class _OrderListPageState extends State<OrderListPage>
                 return const _EmptyOrdersView();
               }
               return ListView.builder(
-                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 4,
+                  horizontal: 8,
+                ),
                 itemCount: filtered.length,
                 itemBuilder: (ctx, i) {
                   final item = filtered[i];
                   final diffMin = _elapsedMinutes(item.createdAt);
 
-                  // テーブルの色をリアルタイムで取得
                   final tableColor =
                   TableColorManager.getTableColor(item.tableName);
-
-                  // しきい値に応じた遅延ハイライト色
-                  final bgColor = _calcDelayHighlightColor(item.status, diffMin);
+                  final bgColor =
+                  _calcDelayHighlightColor(item.status, diffMin);
 
                   return _buildDismissible(item, tableColor, bgColor);
                 },
@@ -682,13 +664,12 @@ class _OrderListPageState extends State<OrderListPage>
 
   Widget _buildDismissible(_ItemData item, Color tableColor, Color bgColor) {
     final keyVal = ValueKey('${item.orderId}_${item.itemIndex}_${item.status}');
-    final isUnprovided = item.status == 'unprovided';
-    final isCanceled = item.status == 'canceled';
-    final isProvided = item.status == 'provided';
+    final isUnprovided = (item.status == 'unprovided');
+    final isCanceled = (item.status == 'canceled');
+    final isProvided = (item.status == 'provided');
 
-    final canSwipe = isUnprovided || isCanceled || isProvided;
-    final direction =
-    canSwipe ? DismissDirection.horizontal : DismissDirection.none;
+    final canSwipe = (isUnprovided || isCanceled || isProvided);
+    final direction = canSwipe ? DismissDirection.horizontal : DismissDirection.none;
 
     return Dismissible(
       key: keyVal,
@@ -713,8 +694,7 @@ class _OrderListPageState extends State<OrderListPage>
             ),
           );
           if (confirm != true) return false;
-        }
-        if (isCanceled) {
+        } else if (isCanceled) {
           final confirm = await showDialog<bool>(
             context: context,
             builder: (c) => AlertDialog(
@@ -733,8 +713,7 @@ class _OrderListPageState extends State<OrderListPage>
             ),
           );
           if (confirm != true) return false;
-        }
-        if (isProvided) {
+        } else if (isProvided) {
           final confirm = await showDialog<bool>(
             context: context,
             builder: (c) => AlertDialog(
@@ -796,9 +775,9 @@ class _OrderListPageState extends State<OrderListPage>
   }
 
   Widget _buildSwipeBackground(_ItemData item, {required bool isStartToEnd}) {
-    final isUnprovided = item.status == 'unprovided';
-    final isCanceled = item.status == 'canceled';
-    final isProvided = item.status == 'provided';
+    final isUnprovided = (item.status == 'unprovided');
+    final isCanceled = (item.status == 'canceled');
+    final isProvided = (item.status == 'provided');
 
     if (isStartToEnd) {
       if (isUnprovided) {
@@ -837,6 +816,7 @@ class _OrderListPageState extends State<OrderListPage>
         );
       }
     } else {
+      // DismissDirection.endToStart
       if (isUnprovided) {
         return Container(
           color: Colors.red,
@@ -877,6 +857,7 @@ class _OrderListPageState extends State<OrderListPage>
   }
 }
 
+// モデルクラス
 class _ItemData {
   final String orderId;
   final String tableName;
@@ -897,20 +878,16 @@ class _ItemData {
   });
 }
 
-///
-/// _OrderCard: 受け取った色情報をただ反映するだけ
-///
 class _OrderCard extends StatelessWidget {
   final _ItemData itemData;
   final Color tableColor;
   final Color bgColor;
 
   const _OrderCard({
-    Key? key,
     required this.itemData,
     required this.tableColor,
     required this.bgColor,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -921,7 +898,6 @@ class _OrderCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(8),
-        // 左側の太い色付きボーダーをテーブルカラーに
         border: Border(left: BorderSide(width: 20, color: tableColor)),
       ),
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
@@ -983,57 +959,27 @@ class _OrderCard extends StatelessWidget {
   }
 
   Widget _buildStatusBadge(String status) {
-    if (status == 'unprovided') {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.grey,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: const Text(
-          '未提供',
-          style: TextStyle(color: Colors.white, fontSize: 12),
-        ),
-      );
-    } else if (status == 'provided') {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.green,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: const Text(
-          '提供済',
-          style: TextStyle(color: Colors.white, fontSize: 12),
-        ),
-      );
-    } else if (status == 'canceled') {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.redAccent,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: const Text(
-          'キャンセル',
-          style: TextStyle(color: Colors.white, fontSize: 12),
-        ),
-      );
+    switch (status) {
+      case 'unprovided':
+        return _badge('未提供', Colors.grey);
+      case 'provided':
+        return _badge('提供済', Colors.green);
+      case 'canceled':
+        return _badge('キャンセル', Colors.redAccent);
+      default:
+        return _badge(status, Colors.grey);
     }
+  }
+
+  Widget _badge(String text, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.grey,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        status,
-        style: const TextStyle(color: Colors.white, fontSize: 12),
-      ),
+      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
+      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 12)),
     );
   }
 
-  bool _isNew(int diffMin) => diffMin < 3;
+  bool _isNew(int diffMin) => (diffMin < 3);
 
   int _elapsedMinutes(String createdAtStr) {
     if (createdAtStr.isEmpty) return 0;
@@ -1049,8 +995,7 @@ class _OrderCard extends StatelessWidget {
         naive.millisecond,
         naive.microsecond,
       );
-      final dtLocal = dtUtc.toLocal();
-      return DateTime.now().difference(dtLocal).inMinutes;
+      return DateTime.now().difference(dtUtc.toLocal()).inMinutes;
     } catch (e) {
       print('Time parsing error: $e');
       return 0;
@@ -1059,11 +1004,11 @@ class _OrderCard extends StatelessWidget {
 
   String _formatElapsedTime(int minutes) {
     if (minutes < 1) return "たった今";
-    if (minutes < 60) return "${minutes}分前";
+    if (minutes < 60) return "$minutes分前";
     final hours = minutes ~/ 60;
-    if (hours < 24) return "${hours}時間前";
+    if (hours < 24) return "$hours時間前";
     final days = hours ~/ 24;
-    return "${days}日前";
+    return "$days日前";
   }
 }
 

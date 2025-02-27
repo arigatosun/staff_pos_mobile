@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 class EmptyOrdersView extends StatelessWidget {
-  const EmptyOrdersView({Key? key}) : super(key: key);
+  const EmptyOrdersView({super.key});
 
   @override
   Widget build(BuildContext context) {

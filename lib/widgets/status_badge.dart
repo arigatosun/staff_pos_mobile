@@ -4,9 +4,9 @@ class StatusBadge extends StatelessWidget {
   final String status;
 
   const StatusBadge({
-    Key? key,
+    super.key,
     required this.status,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

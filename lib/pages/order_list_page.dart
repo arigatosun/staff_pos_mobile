@@ -5,7 +5,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
 class OrderListPage extends StatefulWidget {
-  const OrderListPage({Key? key}) : super(key: key);
+  const OrderListPage({super.key});
 
   @override
   State<OrderListPage> createState() => _OrderListPageState();
@@ -198,7 +198,7 @@ class _OrderListPageState extends State<OrderListPage> {
 
       // 2) デバッグログを詳しく表示
       print('--- Debug: updateResponse ---');
-      print('Data: ${updateResponse}');
+      print('Data: $updateResponse');
       // SupabaseのFlutterクライアントであれば、
       // updateResponse そのものが List や Map の場合もありますが、
       // PostgrestResponse型の場合は updateResponse.data / updateResponse.error などになる場合も。
@@ -210,7 +210,7 @@ class _OrderListPageState extends State<OrderListPage> {
       }
 
       // もし updateResponse が Map なら
-      if (updateResponse is Map && updateResponse.isNotEmpty) {
+      if (updateResponse.isNotEmpty) {
         print('ステータス更新成功: $updateResponse');
       }
       // もし List の場合は
@@ -408,7 +408,7 @@ class _EmptyOrdersView extends StatelessWidget {
 
 class _StatusBadge extends StatelessWidget {
   final String? status;
-  const _StatusBadge({Key? key, required this.status}) : super(key: key);
+  const _StatusBadge({required this.status});
 
   @override
   Widget build(BuildContext context) {
@@ -448,7 +448,7 @@ class _StatusBadge extends StatelessWidget {
 
 class _OrderItemsView extends StatelessWidget {
   final List<dynamic> items;
-  const _OrderItemsView({Key? key, required this.items}) : super(key: key);
+  const _OrderItemsView({required this.items});
 
   @override
   Widget build(BuildContext context) {
@@ -483,7 +483,7 @@ class _OrderItemsView extends StatelessWidget {
               ],
             ),
           );
-        }).toList(),
+        }),
       ],
     );
   }

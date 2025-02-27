@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
-// こちらが必須： PostgrestMap, PostgrestList, PostgrestException を使う
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:staff_pos_app/services/supabase_manager.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({Key? key}) : super(key: key);
+  final int storeId;
+  const SettingsPage({super.key, required this.storeId});
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -14,23 +14,18 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   /// 「遅延表示を有効にする」フラグ
-  /// DB取得前は不明なので null。値が取れたら true/false が入る。
   bool? _isDelayOn;
 
   /// 遅延閾値(分)
-  /// こちらも DB 取得前は不明なので null。値が取れたら int が入る。
   int? _threshold1;
   int? _threshold2;
   int? _threshold3;
 
-  /// テーブルカラー情報
+  /// テーブルカラー情報: [ { table_name: '...', hex_color: '#FFFF...' }, ... ]
   List<Map<String, dynamic>> _tableColorList = [];
 
   /// ローディング中かどうか
   bool _isLoading = false;
-
-  /// store_settings テーブルで使用する固定ID
-  static const fixedStoreSettingsId = '00000000-0000-0000-0000-000000000001';
 
   @override
   void initState() {
@@ -39,208 +34,120 @@ class _SettingsPageState extends State<SettingsPage> {
     _fetchTableColors();
   }
 
-  //----------------------------------------------------------------------------
-  // store_settingsを1行だけ取得
-  //----------------------------------------------------------------------------
+  // ------------------------------------------------------------------------
+  // 1) store_settings を読み込み (store_id = widget.storeId で1行を特定)
+  // ------------------------------------------------------------------------
   Future<void> _fetchStoreSettings() async {
     setState(() => _isLoading = true);
-
     try {
-      // ① Supabase から maybeSingle() で単一行を取得すると、
-      //    成功時は PostgrestMap? が返る（無い場合は null）
-      //    エラー時は PostgrestException が throw される
-      final PostgrestMap? data = await supabase
+      final data = await supabase
           .from('store_settings')
           .select()
-          .eq('id', fixedStoreSettingsId)
+          .eq('store_id', widget.storeId) // store_id で絞り込み
           .maybeSingle();
 
-      // ② もし data == null なら該当行が存在しない
       if (data == null) {
-        debugPrint('Error: store_settings not found for id=$fixedStoreSettingsId');
+        // store_settings がまだ存在しない場合もある
+        debugPrint('No store_settings found for store_id=${widget.storeId}');
         setState(() => _isLoading = false);
         return;
       }
 
-      debugPrint('Store Settings data => $data');
+      // 取得成功時: データをパース
+      _isDelayOn = data['is_delay_highlight_on'] as bool? ?? false;
+      _threshold1 = data['delay_threshold1'] as int? ?? 10;
+      _threshold2 = data['delay_threshold2'] as int? ?? 40;
+      _threshold3 = data['delay_threshold3'] as int? ?? 60;
 
-      // is_delay_highlight_on
-      final rawDelayOn = data['is_delay_highlight_on'];
-      if (rawDelayOn is bool) {
-        _isDelayOn = rawDelayOn;
-      } else if (rawDelayOn is String) {
-        _isDelayOn = rawDelayOn.toLowerCase() == 'true';
-      } else {
-        debugPrint('Error: is_delay_highlight_on のパースに失敗 raw=$rawDelayOn');
-      }
-
-      // delay_threshold1
-      final rawT1 = data['delay_threshold1'];
-      if (rawT1 is int) {
-        _threshold1 = rawT1;
-      } else if (rawT1 is double) {
-        _threshold1 = rawT1.toInt();
-      } else if (rawT1 is String) {
-        final parsed = int.tryParse(rawT1);
-        if (parsed == null) {
-          debugPrint('Error: delay_threshold1 のパースに失敗 raw=$rawT1');
-        } else {
-          _threshold1 = parsed;
-        }
-      } else {
-        debugPrint('Error: delay_threshold1 のパースに失敗 raw=$rawT1');
-      }
-
-      // delay_threshold2
-      final rawT2 = data['delay_threshold2'];
-      if (rawT2 is int) {
-        _threshold2 = rawT2;
-      } else if (rawT2 is double) {
-        _threshold2 = rawT2.toInt();
-      } else if (rawT2 is String) {
-        final parsed = int.tryParse(rawT2);
-        if (parsed == null) {
-          debugPrint('Error: delay_threshold2 のパースに失敗 raw=$rawT2');
-        } else {
-          _threshold2 = parsed;
-        }
-      } else {
-        debugPrint('Error: delay_threshold2 のパースに失敗 raw=$rawT2');
-      }
-
-      // delay_threshold3
-      final rawT3 = data['delay_threshold3'];
-      if (rawT3 is int) {
-        _threshold3 = rawT3;
-      } else if (rawT3 is double) {
-        _threshold3 = rawT3.toInt();
-      } else if (rawT3 is String) {
-        final parsed = int.tryParse(rawT3);
-        if (parsed == null) {
-          debugPrint('Error: delay_threshold3 のパースに失敗 raw=$rawT3');
-        } else {
-          _threshold3 = parsed;
-        }
-      } else {
-        debugPrint('Error: delay_threshold3 のパースに失敗 raw=$rawT3');
-      }
-
-      setState(() {}); // 値を更新してUIに反映する
     } on PostgrestException catch (e) {
-      // DBエラーなど
-      debugPrint('Failed to fetch store_settings (PostgrestException): ${e.message}');
+      debugPrint('PostgrestException: ${e.message}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('store_settingsの取得に失敗: ${e.message}')),
+          SnackBar(content: Text('store_settings取得エラー: ${e.message}')),
         );
       }
     } catch (e) {
-      // その他の予期せぬエラー
-      debugPrint('Failed to fetch store_settings (Other): $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('store_settingsの取得に失敗: $e')),
-        );
-      }
+      debugPrint('Error: $e');
     } finally {
       setState(() => _isLoading = false);
     }
   }
 
-  //----------------------------------------------------------------------------
-  // table_colors全件取得
-  // ※ こちらは複数行を取得するので maybeSingle() は使わない
-  //----------------------------------------------------------------------------
+  // ------------------------------------------------------------------------
+  // 2) table_colors を全件取得 (store_id で絞り込み)
+  // ------------------------------------------------------------------------
   Future<void> _fetchTableColors() async {
     setState(() => _isLoading = true);
-
     try {
-      // ① select() で複数行を取得すると PostgrestList が返る（List<dynamic> として見れる）
-      //    エラーなら PostgrestException が throw される
-      final PostgrestList data = await supabase
+      final data = await supabase
           .from('table_colors')
-          .select();
+          .select()
+          .eq('store_id', widget.storeId); // store_id で絞る
 
-      debugPrint('===== fetchTableColors response =====');
-      debugPrint(data.toString()); // PostgrestList([...]) のように見える
-
-      // ② 実際には中身が List<dynamic> なので、forで回しつつ map に取り出す
-      final tableList = <Map<String, dynamic>>[];
-      for (final row in data) {
-        // row は dynamic だが、実際は Map<String, dynamic>想定
-        final mapRow = row as Map<String, dynamic>;
-        tableList.add({
-          'table_name': mapRow['table_name'],
-          'hex_color': mapRow['hex_color'] ?? '#FF9E9E9E',
-        });
-      }
-
-      setState(() => _tableColorList = tableList);
-    } on PostgrestException catch (e) {
-      debugPrint('Failed to fetch table_colors (PostgrestException): ${e.message}');
+      _tableColorList = data.map((row) {
+        return {
+          'table_name': row['table_name'],
+          'hex_color': row['hex_color'] ?? '#FF9E9E9E',
+        };
+      }).toList();
+        } on PostgrestException catch (e) {
+      debugPrint('table_colors取得エラー: ${e.message}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('table_colorsの取得に失敗: ${e.message}')),
+          SnackBar(content: Text('table_colors取得エラー: ${e.message}')),
         );
       }
     } catch (e) {
-      debugPrint('Failed to fetch table_colors (Other): $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('table_colorsの取得に失敗: $e')),
-        );
-      }
+      debugPrint('Error: $e');
     } finally {
       setState(() => _isLoading = false);
     }
   }
 
-  //----------------------------------------------------------------------------
-  // store_settings & table_colorsの保存
-  //----------------------------------------------------------------------------
+  // ------------------------------------------------------------------------
+  // 3) store_settings & table_colors を保存
+  // ------------------------------------------------------------------------
   Future<void> _saveAllSettings() async {
     setState(() => _isLoading = true);
     try {
-      // store_settings の更新データを組み立てる
-      final storeSettingsRow = <String, dynamic>{'id': fixedStoreSettingsId};
-
-      // null でなければ DB に送る
-      if (_isDelayOn != null) {
-        storeSettingsRow['is_delay_highlight_on'] = _isDelayOn;
-      }
-      if (_threshold1 != null) {
-        storeSettingsRow['delay_threshold1'] = _threshold1;
-      }
-      if (_threshold2 != null) {
-        storeSettingsRow['delay_threshold2'] = _threshold2;
-      }
-      if (_threshold3 != null) {
-        storeSettingsRow['delay_threshold3'] = _threshold3;
-      }
-
-      // upsert は「衝突時に更新する」処理
-      // 新APIではそのまま実行すると 成功時には PostgrestList / PostgrestMap が返り、エラー時は例外が投げられます
-      final result = await supabase
+      // 3-1) 既存のstore_settingsレコードがあるか確認
+      final existingSettings = await supabase
           .from('store_settings')
-          .upsert(storeSettingsRow, onConflict: 'id');
+          .select('id')
+          .eq('store_id', widget.storeId)
+          .maybeSingle();
 
-      // 単数 or 複数行のリストが返るが、今回は使わないのでログだけ
-      debugPrint('===== store_settings upsert result =====');
-      debugPrint(result.toString());
+      final settingsData = <String, dynamic>{
+        'store_id': widget.storeId,
+        'is_delay_highlight_on': _isDelayOn ?? false,
+        'delay_threshold1': _threshold1 ?? 10,
+        'delay_threshold2': _threshold2 ?? 40,
+        'delay_threshold3': _threshold3 ?? 60,
+      };
 
-      // table_colors の更新
-      for (final t in _tableColorList) {
-        final tName = t['table_name'] as String?;
-        final hex = t['hex_color'] as String?;
-        if (tName == null || hex == null) continue;
+      // 既存レコードがある場合は更新、なければ新規作成
+      if (existingSettings != null) {
+        await supabase
+            .from('store_settings')
+            .update(settingsData)
+            .eq('store_id', widget.storeId);
+      } else {
+        await supabase
+            .from('store_settings')
+            .insert(settingsData);
+      }
 
-        final updateResp = await supabase
+      // 3-2) table_colorsの更新
+      for (final row in _tableColorList) {
+        final tName = row['table_name'];
+        final hex = row['hex_color'];
+
+        // 複合主キー (store_id, table_name) で特定
+        await supabase
             .from('table_colors')
             .update({'hex_color': hex})
+            .eq('store_id', widget.storeId)
             .eq('table_name', tName);
-
-        debugPrint('===== table_colors updateResp for $tName =====');
-        debugPrint(updateResp.toString());
       }
 
       if (mounted) {
@@ -248,18 +155,11 @@ class _SettingsPageState extends State<SettingsPage> {
           const SnackBar(content: Text('設定を保存しました')),
         );
       }
-    } on PostgrestException catch (e) {
-      debugPrint('Failed to saveAllSettings (PostgrestException): ${e.message}');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('設定保存中にエラー: ${e.message}')),
-        );
-      }
     } catch (e) {
-      debugPrint('Failed to saveAllSettings (Other): $e');
+      debugPrint('Save error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('設定保存中にエラー: $e')),
+          SnackBar(content: Text('設定保存エラー: $e')),
         );
       }
     } finally {
@@ -267,9 +167,9 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  //----------------------------------------------------------------------------
+  // ------------------------------------------------------------------------
   // カラーピッカー
-  //----------------------------------------------------------------------------
+  // ------------------------------------------------------------------------
   Future<void> _pickColor(Map<String, dynamic> tableInfo) async {
     final initialColor = _parseColor(tableInfo['hex_color']) ?? Colors.grey;
     var pickedColor = initialColor;
@@ -281,7 +181,9 @@ class _SettingsPageState extends State<SettingsPage> {
           title: Text('${tableInfo['table_name']} の色を選択'),
           content: BlockPicker(
             pickerColor: initialColor,
-            onColorChanged: (Color color) => pickedColor = color,
+            onColorChanged: (Color color) {
+              pickedColor = color;
+            },
           ),
           actions: [
             TextButton(
@@ -297,6 +199,7 @@ class _SettingsPageState extends State<SettingsPage> {
       },
     );
 
+    // ピッカーで選択された色を反映
     setState(() {
       tableInfo['hex_color'] =
       '#${pickedColor.value.toRadixString(16).padLeft(8, '0').toUpperCase()}';
@@ -312,12 +215,12 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  //----------------------------------------------------------------------------
+  // ------------------------------------------------------------------------
   // UI
-  //----------------------------------------------------------------------------
+  // ------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
-    // 遅延表示フラグが null の場合、スイッチは false 扱いにする
+    // 遅延表示フラグが null の場合はとりあえず false 扱い
     final isDelayOnVal = _isDelayOn ?? false;
 
     return Scaffold(
@@ -330,15 +233,15 @@ class _SettingsPageState extends State<SettingsPage> {
           ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              // 遅延設定
               Card(
                 elevation: 2,
-                color: Colors.white,  // 追加
+                color: Colors.white,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // 横幅を他と合わせるため contentPadding をゼロに設定
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         title: const Text(
@@ -346,10 +249,11 @@ class _SettingsPageState extends State<SettingsPage> {
                           style: TextStyle(fontWeight: FontWeight.bold),
                         ),
                         value: isDelayOnVal,
-                        onChanged: (val) => setState(() => _isDelayOn = val),
+                        onChanged: (val) {
+                          setState(() => _isDelayOn = val);
+                        },
                       ),
                       if (isDelayOnVal) ...[
-                        // 説明テキストエリアの外側パディングを水平方向はなくし、縦方向のみとする
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 8),
                           child: Card(
@@ -357,18 +261,30 @@ class _SettingsPageState extends State<SettingsPage> {
                             child: Padding(
                               padding: EdgeInsets.all(12),
                               child: Text(
-                                '※ここで設定した時間を超過した商品は、視覚的に色分けして表示されます。',
+                                '※ここで設定した時間を超過した商品は色分けされます。',
                                 style: TextStyle(fontSize: 14),
                               ),
                             ),
                           ),
                         ),
-                        _buildThresholdField('遅延表示時間1', _threshold1,
-                                (v) => _threshold1 = v, '最初の警告表示までの時間'),
-                        _buildThresholdField('遅延表示時間2', _threshold2,
-                                (v) => _threshold2 = v, '中間の警告表示までの時間'),
-                        _buildThresholdField('遅延表示時間3', _threshold3,
-                                (v) => _threshold3 = v, '最終の警告表示までの時間'),
+                        _buildThresholdField(
+                          label: '遅延表示時間1',
+                          value: _threshold1,
+                          onChanged: (v) => _threshold1 = v,
+                          helperText: '最初の警告表示までの時間(分)',
+                        ),
+                        _buildThresholdField(
+                          label: '遅延表示時間2',
+                          value: _threshold2,
+                          onChanged: (v) => _threshold2 = v,
+                          helperText: '中間の警告表示までの時間(分)',
+                        ),
+                        _buildThresholdField(
+                          label: '遅延表示時間3',
+                          value: _threshold3,
+                          onChanged: (v) => _threshold3 = v,
+                          helperText: '最終の警告表示までの時間(分)',
+                        ),
                         const SizedBox(height: 8),
                       ],
                     ],
@@ -376,11 +292,12 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
 
-              const Divider(height: 32),
+              const SizedBox(height: 32),
 
+              // テーブルカラー設定
               Card(
                 elevation: 2,
-                color: Colors.white,  // 追加
+                color: Colors.white,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
@@ -396,7 +313,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 8),
                         child: Text(
-                          'カラーボタンをタップして色を選択してください。',
+                          'カラーボタンをタップして色を選択できます。',
                           style: TextStyle(fontSize: 14),
                         ),
                       ),
@@ -422,6 +339,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
 
+          // ローディング中インジケータ
           if (_isLoading)
             Container(
               color: Colors.black26,
@@ -432,21 +350,19 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _buildThresholdField(
-      String label,
-      int? value,
-      void Function(int?) onChanged,
-      String helperText,
-      ) {
+  // 入力フィールド
+  Widget _buildThresholdField({
+    required String label,
+    required int? value,
+    required void Function(int?) onChanged,
+    required String helperText,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.w500),
-          ),
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
           const SizedBox(height: 4),
           Row(
             children: [
@@ -480,6 +396,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final tableName = info['table_name'] as String;
     final hexColor = info['hex_color'] as String?;
     final currentColor = _parseColor(hexColor) ?? Colors.grey;
+
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(vertical: 4),
       title: Text(

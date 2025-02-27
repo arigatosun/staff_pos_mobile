@@ -8,11 +8,11 @@ class OrderItemsView extends StatelessWidget {
   onItemStatusUpdate;
 
   const OrderItemsView({
-    Key? key,
+    super.key,
     required this.orderId,
     required this.items,
     required this.onItemStatusUpdate,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -81,7 +81,7 @@ class OrderItemsView extends StatelessWidget {
               ],
             ),
           );
-        }).toList(),
+        }),
       ],
     );
   }

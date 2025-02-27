@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'dart:ui' as ui;
 import 'dart:math'; // 追加：ランダム生成用
 import '../../services/supabase_manager.dart';
 
 class PaymentHistoryPage extends StatefulWidget {
-  const PaymentHistoryPage({Key? key}) : super(key: key);
+  final int storeId; // ★ 追加: storeIdを受け取る
+  const PaymentHistoryPage({super.key, required this.storeId});
 
   @override
   State<PaymentHistoryPage> createState() => _PaymentHistoryPageState();
@@ -34,14 +34,18 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
   @override
   void initState() {
     super.initState();
+    // ★ storeIdを使って該当店舗の payment_history を購読
     _paymentHistoryStream = supabase
         .from('payment_history')
         .stream(primaryKey: ['id'])
+        .eq('store_id', widget.storeId) // ここで絞り込み
         .order('created_at', ascending: false);
   }
 
+  // 日付フィルタを適用しつつ、日別にグルーピング
   Map<String, List<Map<String, dynamic>>> _filterAndGroupPayments(
-      List<Map<String, dynamic>> allPayments) {
+      List<Map<String, dynamic>> allPayments,
+      ) {
     final Map<String, List<Map<String, dynamic>>> grouped = {};
 
     for (final pay in allPayments) {
@@ -57,11 +61,22 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
       }
 
       if (_startDate != null) {
-        final start = DateTime(_startDate!.year, _startDate!.month, _startDate!.day);
+        final start = DateTime(
+          _startDate!.year,
+          _startDate!.month,
+          _startDate!.day,
+        );
         if (dtLocal.isBefore(start)) continue;
       }
       if (_endDate != null) {
-        final end = DateTime(_endDate!.year, _endDate!.month, _endDate!.day, 23, 59, 59);
+        final end = DateTime(
+          _endDate!.year,
+          _endDate!.month,
+          _endDate!.day,
+          23,
+          59,
+          59,
+        );
         if (dtLocal.isAfter(end)) continue;
       }
 
@@ -184,25 +199,30 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      _buildFilterButton('すべて',
+                      _buildFilterButton(
+                        'すべて',
                         onTap: _filterAll,
                         isSelected: _startDate == null && _endDate == null,
                       ),
                       const SizedBox(width: 8),
-                      _buildFilterButton('今日',
+                      _buildFilterButton(
+                        '今日',
                         onTap: _filterToday,
-                        isSelected: _startDate != null && _endDate != null &&
+                        isSelected: _startDate != null &&
+                            _endDate != null &&
                             _startDate!.year == DateTime.now().year &&
                             _startDate!.month == DateTime.now().month &&
                             _startDate!.day == DateTime.now().day,
                       ),
                       const SizedBox(width: 8),
-                      _buildFilterButton('昨日',
+                      _buildFilterButton(
+                        '昨日',
                         onTap: _filterYesterday,
-                        isSelected: _startDate != null && _endDate != null &&
+                        isSelected: _startDate != null &&
+                            _endDate != null &&
                             _startDate!.year == DateTime.now().year &&
                             _startDate!.month == DateTime.now().month &&
-                            _startDate!.day == DateTime.now().day - 1,
+                            _startDate!.day == (DateTime.now().day - 1),
                       ),
                       const SizedBox(width: 8),
                       _buildFilterButton(
@@ -403,6 +423,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 日付タイトル
           Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -452,6 +473,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
             ),
           ),
           const Divider(height: 1),
+          // 当日分の支払いリスト
           Column(
             children: payments.map((pay) => _buildPaymentItem(pay)).toList(),
           ),
@@ -493,13 +515,14 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
         color: Colors.transparent,
         child: InkWell(
           onTap: () {
-            // タップ時の詳細表示などを実装可能
+            // タップ時の詳細表示など
           },
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                // 左側: テーブル名 & 決済手段
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -532,7 +555,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
                             paymentMethodMock,
                             style: TextStyle(
                               fontSize: 13,
-                              color: Colors.grey.shade600, // 決済手段は常にグレー
+                              color: Colors.grey.shade600,
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -562,12 +585,14 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
                     ],
                   ),
                 ),
+                // 右側: 金額
                 Text(
                   '¥${amount.toStringAsFixed(0)}',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: isNegativeAmount ? Colors.red : Colors.black87, // 金額のみ条件付きで赤文字
+                    color:
+                    isNegativeAmount ? Colors.red : Colors.black87,
                   ),
                 ),
               ],

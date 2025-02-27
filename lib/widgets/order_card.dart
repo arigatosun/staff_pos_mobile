@@ -10,10 +10,10 @@ class OrderCard extends StatelessWidget {
   onItemStatusUpdate;
 
   const OrderCard({
-    Key? key,
+    super.key,
     required this.orderData,
     required this.onItemStatusUpdate,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -110,13 +110,13 @@ class OrderCard extends StatelessWidget {
     if (minutes < 1) {
       return "たった今";
     } else if (minutes < 60) {
-      return "${minutes}分前";
+      return "$minutes分前";
     }
     final hours = minutes ~/ 60;
     if (hours < 24) {
-      return "${hours}時間前";
+      return "$hours時間前";
     }
     final days = hours ~/ 24;
-    return "${days}日前";
+    return "$days日前";
   }
 }

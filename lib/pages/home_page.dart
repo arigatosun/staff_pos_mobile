@@ -5,7 +5,8 @@ import 'package:staff_pos_app/pages/history/payment_history_page.dart';
 import 'package:staff_pos_app/pages/settings/settings_page.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  final int storeId; // 受け取り用
+  const HomePage({super.key, required this.storeId});
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -14,23 +15,23 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
 
-  // 表示するページをリスト管理
-  final List<Widget> _pages = const [
-    // 1) 注文管理ページ（キッチンオーダー画面）
-    OrderListPage(),
-    // 2) テーブル管理ページ
-    TableListPage(),
-    // 3) 会計履歴ページ
-    PaymentHistoryPage(),
-    // 4) 設定ページ
-    SettingsPage(),
-  ];
+  // 後から初期化するため late
+  late final List<Widget> _pages;
 
-  // ボトムナビゲーションのタップ時に呼ばれる
+  @override
+  void initState() {
+    super.initState();
+    // 子ページに storeId を渡す
+    _pages = [
+      OrderListPage(storeId: widget.storeId),
+      TableListPage(storeId: widget.storeId),
+      PaymentHistoryPage(storeId: widget.storeId),
+      SettingsPage(storeId: widget.storeId),
+    ];
+  }
+
   void _onItemTapped(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
+    setState(() => _selectedIndex = index);
   }
 
   @override
