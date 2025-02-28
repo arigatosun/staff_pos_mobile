@@ -1,6 +1,9 @@
 // lib/services/api_service.dart
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:staff_pos_app/services/supabase_manager.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ApiService {
   // Next.js 側のベースURL (ローカルテスト用アドレスなど)
@@ -24,8 +27,14 @@ class ApiService {
     if (response.statusCode == 200) {
       final jsonBody = jsonDecode(response.body);
       if (jsonBody['success'] == true) {
-        // 正常時 -> storeId を返す
-        return jsonBody['storeId'] as int;
+        // 正常時 -> storeId を取得
+        final int storeId = jsonBody['storeId'] as int;
+
+        // ログイン成功時にStoreIDを保存
+        SupabaseManager.setLoggedInStoreId(storeId);
+        print('ログイン成功: store_id=$storeId をSupabaseManagerに保存しました');
+
+        return storeId;
       } else if (jsonBody['error'] != null) {
         throw Exception(jsonBody['error']);
       } else {
@@ -40,6 +49,94 @@ class ApiService {
       } catch (e) {
         throw Exception('HTTP Error: ${response.statusCode}');
       }
+    }
+  }
+
+  /// ログアウト処理
+  static Future<void> logoutPos() async {
+    // SupabaseManagerから店舗IDをクリア
+    SupabaseManager.clearLoggedInStoreId();
+    print('ログアウト: SupabaseManagerから店舗IDをクリアしました');
+
+    // 必要に応じて他のログアウト処理を追加
+    // - セッションクリア
+    // - キャッシュクリア
+    // - 認証トークンの削除 など
+  }
+
+  /// ログイン後にFCMトークンを更新する（完全実装）
+  static Future<void> updateFcmTokenWithStoreId(int storeId) async {
+    try {
+      // FCMトークンを取得
+      String? token = await FirebaseMessaging.instance.getToken();
+      if (token == null) {
+        print('FCMトークン取得失敗: null');
+        return;
+      }
+
+      print('FCMトークン更新開始: $token、店舗ID: $storeId');
+
+      // Supabaseクライアント取得
+      final client = Supabase.instance.client;
+
+      // 既存のトークンを検索
+      final existingDevices = await client
+          .from('pos_devices')
+          .select()
+          .eq('fcm_token', token);
+
+      if (existingDevices.isEmpty) {
+        // 新規登録
+        final result = await client.from('pos_devices').insert({
+          'fcm_token': token,
+          'device_name': 'Android Device ${DateTime.now().millisecondsSinceEpoch}',
+          'store_id': storeId,
+          // updated_atカラムの削除
+        }).select();
+        print('FCMトークンを新規登録: $result');
+      } else {
+        // 既存のトークンを更新
+        final result = await client
+            .from('pos_devices')
+            .update({
+          'store_id': storeId,
+          // updated_atカラムの削除
+        })
+            .eq('fcm_token', token)
+            .select();
+        print('FCMトークンの店舗IDを更新: $result');
+      }
+
+      print('FCMトークン更新完了: $token -> 店舗ID $storeId');
+    } catch (e) {
+      print('FCMトークン更新エラー: $e');
+      if (e is PostgrestException) {
+        print('PostgrestException: ${e.message}');
+        print('詳細: ${e.details}');
+      }
+    }
+  }
+
+  /// 店舗の設定を取得
+  static Future<Map<String, dynamic>> getStoreSettings(int storeId) async {
+    final url = Uri.parse('$baseUrl/api/store-settings?storeId=$storeId');
+
+    try {
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final jsonBody = jsonDecode(response.body);
+        if (jsonBody['success'] == true) {
+          return jsonBody['data'] as Map<String, dynamic>;
+        } else {
+          throw Exception(jsonBody['error'] ?? 'Failed to get store settings');
+        }
+      } else {
+        throw Exception('HTTP Error: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('店舗設定取得エラー: $e');
+      rethrow;
     }
   }
 }

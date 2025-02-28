@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/api_service.dart';
-// ★ HomePage を利用するための import （パスはプロジェクト構成に合わせて調整）
 import 'package:staff_pos_app/pages/home_page.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 class PosLoginPage extends StatefulWidget {
   const PosLoginPage({super.key});
@@ -36,6 +36,9 @@ class _PosLoginPageState extends State<PosLoginPage> {
       // APIを呼んで storeId を取得
       final storeId = await ApiService.loginPos(posLoginId, posLoginPassword);
       print('ログイン成功: storeId=$storeId');
+
+      // ログイン成功後にFCMトークンを強制更新
+      await ApiService.updateFcmTokenWithStoreId(storeId);
 
       // HomePage へ遷移
       if (!mounted) return;

@@ -5,6 +5,9 @@ class SupabaseManager {
   static bool _initialized = false;
   static late final SupabaseClient _client;
 
+  // 現在ログインしている店舗のIDを保持する変数
+  static int? _currentStoreId;
+
   factory SupabaseManager() {
     return _instance;
   }
@@ -61,6 +64,37 @@ class SupabaseManager {
       throw Exception('Supabaseが初期化されていません。先にSupabaseManager.initialize()を呼び出してください。');
     }
     return _client;
+  }
+
+  // 店舗IDを設定するメソッド - ログイン成功時に呼び出す
+  static void setLoggedInStoreId(int storeId) {
+    _currentStoreId = storeId;
+    print('店舗ID設定: $_currentStoreId');
+
+    // 必要に応じてローカルストレージなどに保存することも検討
+    // SharedPreferencesやSecureStorageなどを使用
+  }
+
+  // 店舗IDを取得するメソッド - FCMトークン保存時などに利用
+  static int? getLoggedInStoreId() {
+    // 必要に応じてローカルストレージから読み込む実装も検討
+    return _currentStoreId;
+  }
+
+  // ログアウト時にクリアするメソッド
+  static void clearLoggedInStoreId() {
+    _currentStoreId = null;
+    print('店舗IDをクリアしました');
+
+    // 必要に応じてローカルストレージからも削除
+  }
+
+  // リアルタイム購読の状態をリセット
+  static void resetRealtimeSubscriptions() {
+    if (_initialized) {
+      _client.realtime.removeAllChannels();
+      print('リアルタイム購読をリセットしました');
+    }
   }
 }
 

@@ -51,6 +51,5 @@ dev_dependencies:
   flutter_native_splash: ^2.3.9
 
 flutter:
-  uses-material-design: true
   assets:
     - assets/notification_sound.mp3
