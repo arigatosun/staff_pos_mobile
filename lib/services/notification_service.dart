@@ -13,6 +13,12 @@ class NotificationService {
   // 重複防止のために処理済みメッセージIDを追跡
   static final Set<String> _processedMessageIds = {};
 
+  // 最後に通知を表示した時間（短時間での連続通知を防止）
+  static DateTime? _lastNotificationTime;
+
+  // デバッグ用フラグ - 本番環境ではfalseにすること
+  static bool debugAlwaysShowNotifications = false;
+
   // Android用の通知チャンネル設定
   static AndroidNotificationChannel channel = const AndroidNotificationChannel(
     'orders', // Firebase側で設定されているチャンネルID
@@ -71,6 +77,18 @@ class NotificationService {
   // 通知を表示するメソッド（フォアグラウンド/バックグラウンド共通）
   static Future<void> showNotification(RemoteMessage message) async {
     try {
+      // まず即座に勤務状態を確認（バックグラウンド対応）
+      final currentStoreId = SupabaseManager.getLoggedInStoreId();
+      final isWorkingDirectCheck = SupabaseManager.getWorkingStatus();
+
+      print('通知受信: 即座の勤務状態チェック - 店舗ID=${currentStoreId}, 勤務状態=${isWorkingDirectCheck ? "勤務中" : "休憩中"}');
+
+      // 勤務状態が休憩中で、デバッグモードでない場合は通知をスキップ
+      if (currentStoreId != null && !isWorkingDirectCheck && !debugAlwaysShowNotifications) {
+        print('即座のチェック: 休憩中のため通知をスキップします');
+        return;
+      }
+
       final String messageId = message.messageId ?? DateTime.now().millisecondsSinceEpoch.toString();
 
       // 重複チェック - 同じメッセージIDが既に処理されていたらスキップ
@@ -79,10 +97,17 @@ class NotificationService {
         return;
       }
 
+      // 短時間での連続通知を制限（オプション）
+      if (_lastNotificationTime != null) {
+        final timeSinceLastNotification = DateTime.now().difference(_lastNotificationTime!);
+        if (timeSinceLastNotification.inSeconds < 2) { // 2秒以内の連続通知を制限
+          print('直前の通知から${timeSinceLastNotification.inMilliseconds}msしか経過していないため、通知をスキップします');
+          return;
+        }
+      }
+
       // データから店舗IDを取得
       final String? notificationStoreId = message.data['storeId'];
-      // 現在ログインしている店舗のID
-      final int? currentStoreId = SupabaseManager.getLoggedInStoreId();
 
       print('通知の店舗ID: $notificationStoreId');
       print('現在のログイン店舗ID: $currentStoreId');
@@ -93,10 +118,22 @@ class NotificationService {
           print('通知の店舗ID($notificationStoreId)が現在のログイン店舗ID($currentStoreId)と一致しないため、通知をスキップします');
           return;
         }
+
+        // 勤務状態を確認 - 改良版のチェックロジック（データベース確認も含む）
+        final isWorking = await _checkWorkingStatus(currentStoreId);
+        if (!isWorking && !debugAlwaysShowNotifications) {
+          print('勤務中ではないため、通知をスキップします');
+          return;
+        }
+      } else {
+        // 店舗IDが不明な場合は安全策としてスキップ（表示しない）
+        print('店舗IDが不明のため、通知をスキップします');
+        return;
       }
 
       // 処理済みとしてマーク
       _processedMessageIds.add(messageId);
+      _lastNotificationTime = DateTime.now();
 
       // セットのサイズを制限（メモリ消費を防ぐため）
       if (_processedMessageIds.length > 100) {
@@ -108,6 +145,20 @@ class NotificationService {
       print('通知データ: ${message.data}');
       print('通知オブジェクト: ${message.notification != null ? "あり" : "なし"}');
 
+      // メッセージからアイテム情報を抽出
+      String itemsInfo = "";
+      if (message.data.containsKey('items')) {
+        try {
+          final itemsString = message.data['items'].toString();
+          // 簡易的な件数表示
+          if (itemsString.contains('"quantity"')) {
+            itemsInfo = "から${itemsString.split('"quantity"').length - 1}点の注文が入りました";
+          }
+        } catch (e) {
+          print('アイテム情報抽出エラー: $e');
+        }
+      }
+
       RemoteNotification? notification = message.notification;
 
       // 通知タイトルと本文を決定（通知オブジェクトまたはデータから）
@@ -117,12 +168,9 @@ class NotificationService {
 
       final String body = notification?.body ??
           message.data['body'] ??
-          'テーブル ${message.data['tableName'] ?? ''} からの注文が入りました';
+          'テーブル ${message.data['tableName'] ?? ''} ${itemsInfo.isNotEmpty ? itemsInfo : "からの注文が入りました"}';
 
       print('表示する通知: タイトル=$title, 本文=$body');
-
-      // 通知音の再生はシステムの通知機能に任せ、ここでは明示的に再生しない
-      // LocalNotificationsPluginが自動的に通知音を処理するため
 
       // 通知ID - 同じIDの通知は上書きされるので、一意の値を使用
       final int notificationId = messageId.hashCode;
@@ -161,6 +209,102 @@ class NotificationService {
     }
   }
 
+  // 勤務状態を確認するメソッド - バックグラウンド対応版
+  static Future<bool> _checkWorkingStatus(int storeId) async {
+    try {
+      // 優先的にローカルの勤務状態を確認（バックグラウンドでもアクセス可能）
+      final localWorkingStatus = SupabaseManager.getWorkingStatus();
+
+      // 勤務状態がfalseなら通知をスキップ（デバッグモードでない場合）
+      if (!localWorkingStatus && !debugAlwaysShowNotifications) {
+        print('ローカルの勤務状態が休憩中のため、通知をスキップします');
+        return false;
+      }
+
+      // FCMトークンを取得
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token == null) {
+        print('FCMトークンが取得できないため、ローカルの勤務状態を使用します');
+        return localWorkingStatus; // ローカルの状態を信頼する
+      }
+
+      // バックグラウンドではデータベース接続が不安定な場合もあるため
+      // 例外をキャッチして、その場合はローカルの状態を使用
+      try {
+        // トークンに関連付けられたデバイスIDを取得
+        final deviceResponse = await supabase
+            .from('pos_devices')
+            .select('id')
+            .eq('fcm_token', token)
+            .eq('store_id', storeId)
+            .limit(1);
+
+        if (deviceResponse.isEmpty) {
+          print('デバイスが店舗に登録されていないため、ローカルの勤務状態を使用します');
+          return localWorkingStatus;
+        }
+
+        final deviceId = deviceResponse[0]['id'] as String;
+
+        // 勤務状態を取得
+        final statusResponse = await supabase
+            .from('staff_work_status')
+            .select('is_working')
+            .eq('device_id', deviceId)
+            .eq('store_id', storeId)
+            .order('updated_at', ascending: false)
+            .limit(1);
+
+        final bool isWorking = statusResponse.isNotEmpty &&
+            statusResponse[0]['is_working'] == true;
+
+        print('データベースの勤務状態: ${isWorking ? "勤務中" : "勤務外"}');
+
+        // ローカルの状態と違う場合、ローカルの状態を更新（同期）
+        if (isWorking != localWorkingStatus) {
+          await SupabaseManager.setWorkingStatus(isWorking);
+          print('ローカルの勤務状態を更新: ${isWorking ? "勤務中" : "勤務外"}');
+        }
+
+        return isWorking;
+      } catch (e) {
+        print('データベース勤務状態の確認エラー: $e');
+        print('代わりにローカルの勤務状態を使用: ${localWorkingStatus ? "勤務中" : "勤務外"}');
+        return localWorkingStatus;
+      }
+    } catch (e) {
+      print('勤務状態の確認エラー: $e');
+      // エラー発生時はローカルの状態を返す
+      return SupabaseManager.getWorkingStatus();
+    }
+  }
+
+  // バックグラウンド用の簡易勤務状態チェック - データベースアクセスなしで高速判定
+  static bool isWorkingQuickCheck() {
+    try {
+      // ローカルの勤務状態だけを高速チェック
+      return SupabaseManager.getWorkingStatus();
+    } catch (e) {
+      print('クイック勤務状態チェックエラー: $e');
+      return false; // エラー時は安全のためfalse
+    }
+  }
+
+  // 特定のデバイスの勤務状態を取得（他のクラスから呼び出し可能）
+  static Future<bool> isDeviceWorking() async {
+    try {
+      final currentStoreId = SupabaseManager.getLoggedInStoreId();
+      if (currentStoreId == null) {
+        return false;
+      }
+
+      return await _checkWorkingStatus(currentStoreId);
+    } catch (e) {
+      print('勤務状態確認エラー: $e');
+      return false;
+    }
+  }
+
   // 通知権限の確認と要求（必要に応じて使用）
   static Future<bool> requestNotificationPermissions() async {
     try {
@@ -184,6 +328,13 @@ class NotificationService {
   // デバッグ用: 手動でテスト通知を表示
   static Future<void> showTestNotification() async {
     try {
+      // 勤務状態を確認（オプション）
+      final isWorking = await isDeviceWorking();
+      if (!isWorking && !debugAlwaysShowNotifications) {
+        print('勤務中ではないため、テスト通知を表示できません');
+        return;
+      }
+
       await _localNotifications.show(
         DateTime.now().millisecondsSinceEpoch.hashCode,
         'テスト通知',
@@ -214,6 +365,7 @@ class NotificationService {
   // 実行済み通知IDのキャッシュをクリア（必要に応じて使用）
   static void clearProcessedMessageCache() {
     _processedMessageIds.clear();
+    _lastNotificationTime = null;
     print('処理済み通知キャッシュをクリアしました');
   }
 }

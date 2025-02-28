@@ -1,14 +1,13 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
 import '../../services/supabase_manager.dart';
+import '../../services/notification_service.dart'; // NotificationServiceをインポート
 
 /// ---------------------------------------------------------
 /// TableColorManager
@@ -67,10 +66,6 @@ class _OrderListPageState extends State<OrderListPage>
   String? _deviceName;
   bool _isSoundOn = true; // 通知音 ON/OFF
 
-  // ---------------------- ローカル通知 ----------------------
-  final FlutterLocalNotificationsPlugin _notificationsPlugin =
-  FlutterLocalNotificationsPlugin();
-
   late final Stream<List<Map<String, dynamic>>> _ordersStream;
   late TabController _tabController;
   final List<String> _tabs = ['未提供', '提供済', 'キャンセル'];
@@ -88,15 +83,11 @@ class _OrderListPageState extends State<OrderListPage>
   StreamSubscription<List<Map<String, dynamic>>>? _tableColorStreamSub;
   StreamSubscription<List<Map<String, dynamic>>>? _storeSettingsStreamSub;
 
-  // 通知の重複処理を防ぐためのセット
-  final Set<String> _processedMessageIds = {};
-
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: _tabs.length, vsync: this);
 
-    _initializeNotifications();
     _initializeDeviceInfo();
     _setupFCM();
     FirebaseMessaging.instance.onTokenRefresh.listen(_updateFCMToken);
@@ -234,51 +225,7 @@ class _OrderListPageState extends State<OrderListPage>
     return Colors.white;
   }
 
-  // ---------------------- FCM設定 / ローカル通知設定 など ----------------------
-  Future<void> _initializeNotifications() async {
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
-    );
-    const initSettings = InitializationSettings(
-      android: androidSettings,
-      iOS: iosSettings,
-    );
-
-    await _notificationsPlugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: (details) {
-        try {
-          final payload = details.payload;
-          if (payload != null) {
-            final data = json.decode(payload);
-            print('Notification tapped with payload: $data');
-          }
-        } catch (e) {
-          print('Error handling notification tap: $e');
-        }
-      },
-    );
-
-    if (Platform.isAndroid) {
-      const channel = AndroidNotificationChannel(
-        'orders',
-        '注文通知',
-        description: '新規注文の通知を受け取ります',
-        importance: Importance.high,
-        playSound: true,
-        enableVibration: true,
-        sound: RawResourceAndroidNotificationSound('notification_sound'),
-      );
-      await _notificationsPlugin
-          .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
-          ?.createNotificationChannel(channel);
-    }
-  }
-
+  // ---------------------- FCM設定 ----------------------
   Future<void> _initializeDeviceInfo() async {
     try {
       if (Platform.isAndroid) {
@@ -297,37 +244,110 @@ class _OrderListPageState extends State<OrderListPage>
   Future<void> _updateFCMToken(String token) async {
     if (_currentFCMToken == token) return;
     try {
-      if (_currentDeviceId.isEmpty) {
-        final resp = await supabase.from('pos_devices').insert({
+      // 既存のデバイスを検索
+      final existingDevices = await supabase
+          .from('pos_devices')
+          .select('id, fcm_token')
+          .eq('fcm_token', token)
+          .limit(10);
+
+      print('既存のデバイス検索結果: ${existingDevices.length}件');
+
+      if (existingDevices.isNotEmpty) {
+        // 既存のデバイスが見つかった場合
+        // 最初のデバイスIDを利用
+        _currentDeviceId = existingDevices[0]['id'].toString();
+        _currentFCMToken = token;
+
+        // 更新のみ行う（店舗ID、デバイス名）
+        await supabase
+            .from('pos_devices')
+            .update({
           'device_name': _deviceName ?? 'POS Device',
-          'fcm_token': token,
-          'store_id': widget.storeId, // 店舗IDを明示的に保存
-        }).select().single();
-        _currentDeviceId = resp['id'].toString();
-      } else {
+          'store_id': widget.storeId,
+          'last_active': DateTime.now().toIso8601String(),
+        })
+            .eq('id', _currentDeviceId);
+
+        print('既存デバイスを更新: $_currentDeviceId with store ID ${widget.storeId}');
+      } else if (_currentDeviceId.isNotEmpty) {
+        // 現在のデバイスIDが設定済みで、トークンのみ更新する場合
         await supabase
             .from('pos_devices')
             .update({
           'device_name': _deviceName ?? 'POS Device',
           'fcm_token': token,
-          'store_id': widget.storeId, // 店舗IDを明示的に更新
+          'store_id': widget.storeId,
+          'last_active': DateTime.now().toIso8601String(),
         })
             .eq('id', _currentDeviceId);
+
+        _currentFCMToken = token;
+        print('既存デバイスのトークンを更新: $_currentDeviceId with token $token');
+      } else {
+        // 新規デバイス登録
+        // staff_work_statusテーブルの外部キー制約を考慮し、RLSポリシーを適切に設定する必要あり
+        final resp = await supabase.from('pos_devices').insert({
+          'device_name': _deviceName ?? 'POS Device',
+          'fcm_token': token,
+          'store_id': widget.storeId,
+          'last_active': DateTime.now().toIso8601String(),
+        }).select().single();
+
+        _currentDeviceId = resp['id'].toString();
+        _currentFCMToken = token;
+        print('新規デバイスを登録: $_currentDeviceId with store ID ${widget.storeId}');
+
+        // 初期勤務状態を設定（オプション）
+        try {
+          await supabase.from('staff_work_status').insert({
+            'device_id': _currentDeviceId,
+            'store_id': widget.storeId,
+            'is_working': true,
+            'updated_at': DateTime.now().toIso8601String(),
+          });
+          print('初期勤務状態を設定: デバイス=$_currentDeviceId, 勤務中=true');
+        } catch (statusErr) {
+          print('勤務状態の初期設定に失敗: $statusErr');
+          // 勤務状態の設定に失敗しても、デバイス登録自体は成功しているので続行
+        }
       }
-      _currentFCMToken = token;
-      print('FCM token updated: $_currentDeviceId with store ID ${widget.storeId}');
     } catch (e) {
-      print('Error updating FCM token: $e');
+      print('FCMトークン更新エラー: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('FCMトークン管理エラー: $e')),
         );
+      }
+
+      // エラー詳細をより詳しく記録（デバッグ用）
+      if (e.toString().contains('foreign key constraint')) {
+        print('外部キー制約エラー: staff_work_statusテーブルから参照されているため更新できません');
+
+        // 重要: 制約エラーが発生した場合の対応
+        try {
+          print('デバイス情報を読み取り専用モードで取得を試みます...');
+          final deviceInfo = await supabase
+              .from('pos_devices')
+              .select('id, store_id, fcm_token')
+              .eq('fcm_token', token)
+              .maybeSingle();
+
+          if (deviceInfo != null) {
+            _currentDeviceId = deviceInfo['id'].toString();
+            _currentFCMToken = deviceInfo['fcm_token'] as String;
+            print('既存デバイス情報を読み取りました: $_currentDeviceId, store=${deviceInfo['store_id']}');
+          }
+        } catch (readErr) {
+          print('デバイス情報の読み取りにも失敗: $readErr');
+        }
       }
     }
   }
 
   Future<void> _setupFCM() async {
     try {
+      // FCM初期化処理
       final settings = await _firebaseMessaging.requestPermission(
         alert: true,
         badge: true,
@@ -341,12 +361,26 @@ class _OrderListPageState extends State<OrderListPage>
         await _updateFCMToken(token);
       }
 
+      // フォアグラウンドでの通知処理をNotificationServiceに委譲
       FirebaseMessaging.onMessage.listen((message) {
         if (!mounted) return;
-        _showNotificationDialog(message);
+
+        // 通知サービスに通知の表示を委譲
+        NotificationService.showNotification(message);
+
+        // 通知音の設定に応じて音を再生（UI反映用）
+        if (_isSoundOn) {
+          _playNotificationSound();
+        }
+
+        // ダイアログ表示（修正済みメソッド呼び出し）
+        _showNotificationAlertDialog(message);
       });
+
+      // アプリがバックグラウンドから開かれた時の処理
       FirebaseMessaging.onMessageOpenedApp.listen((message) {
         print('onMessageOpenedApp: $message');
+        // 必要に応じて特定の画面に遷移する処理を追加
       });
     } catch (e) {
       print('FCM setup error: $e');
@@ -358,75 +392,24 @@ class _OrderListPageState extends State<OrderListPage>
     }
   }
 
-  void _showNotificationDialog(RemoteMessage message) async {
+  // ダイアログ表示だけを行う簡略化されたメソッド
+  void _showNotificationAlertDialog(RemoteMessage message) {
     if (!mounted) return;
 
-    // まず重複通知をチェック
-    final String messageId = message.messageId ?? DateTime.now().millisecondsSinceEpoch.toString();
-    if (_processedMessageIds.contains(messageId)) {
-      print('通知 ${messageId.substring(0, 15)}... は既に処理済みです。スキップします。');
-      return;
-    }
+    // 通知データを notification フィールドまたは data フィールドから取得
+    final title = message.notification?.title ??
+        message.data['title'] ??
+        '新規注文';
 
-    // 先に店舗IDの検証を行う
-    final String? notificationStoreId = message.data['storeId'];
-    final int? currentStoreId = SupabaseManager.getLoggedInStoreId();
-
-    print('通知の店舗ID: $notificationStoreId');
-    print('現在のログイン店舗ID: $currentStoreId');
-
-    // 店舗IDが一致しない場合は通知をスキップ
-    if (notificationStoreId != null && currentStoreId != null) {
-      if (notificationStoreId != currentStoreId.toString()) {
-        print('通知の店舗ID($notificationStoreId)が現在のログイン店舗ID($currentStoreId)と一致しないため、通知をスキップします');
-        return;
-      }
-    }
-
-    // 処理済みとしてマーク
-    _processedMessageIds.add(messageId);
-    // セットのサイズを制限（メモリ消費を防ぐため）
-    if (_processedMessageIds.length > 100) {
-      _processedMessageIds.remove(_processedMessageIds.first);
-    }
-
-    print('===== 通知表示処理開始 =====');
-    print('MessageId: $messageId');
-    print('通知データ: ${message.data}');
-
-    // 店舗IDが一致した場合のみ通知を表示
-    await _notificationsPlugin.show(
-      DateTime.now().millisecond,
-      message.notification?.title ?? '新規注文',
-      message.notification?.body ?? '',
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          'orders',
-          '注文通知',
-          channelDescription: '新規注文の通知を受け取ります',
-          importance: Importance.high,
-          priority: Priority.high,
-          sound: const RawResourceAndroidNotificationSound('notification_sound'),
-        ),
-        iOS: const DarwinNotificationDetails(
-          presentAlert: true,
-          presentBadge: true,
-          presentSound: true,
-          sound: 'notification_sound.mp3',
-        ),
-      ),
-      payload: json.encode(message.data),
-    );
-
-    if (_isSoundOn) {
-      await _playNotificationSound();
-    }
+    final body = message.notification?.body ??
+        message.data['body'] ??
+        '';
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(message.notification?.title ?? '新規注文'),
-        content: Text(message.notification?.body ?? ''),
+        title: Text(title),
+        content: Text(body),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -435,8 +418,6 @@ class _OrderListPageState extends State<OrderListPage>
         ],
       ),
     );
-
-    print('===== 通知表示完了 =====');
   }
 
   Future<void> _playNotificationSound() async {
@@ -622,9 +603,9 @@ class _OrderListPageState extends State<OrderListPage>
                   Theme.of(context).colorScheme.primary.withOpacity(0.5),
                   inactiveThumbColor: Colors.white,
                   inactiveTrackColor: Colors.grey[400],
-                  overlayColor: WidgetStateProperty.all(Colors.transparent),
+                  overlayColor: MaterialStateProperty.all(Colors.transparent),
                   trackOutlineColor:
-                  WidgetStateProperty.all(Colors.transparent),
+                  MaterialStateProperty.all(Colors.transparent),
                 ),
               ),
               IconButton(

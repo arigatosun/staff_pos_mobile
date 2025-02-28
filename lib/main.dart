@@ -16,6 +16,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'pages/pos_login/pos_login_page.dart';
 
 import 'firebase_options.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// バックグラウンドメッセージを受信する際に呼ばれるハンドラ.
 @pragma('vm:entry-point')
@@ -25,16 +26,36 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+
     print("===== バックグラウンド通知受信 =====");
     print("MessageId: ${message.messageId}");
     print("通知データ: ${message.data}");
     print("通知タイトル: ${message.notification?.title}");
     print("通知本文: ${message.notification?.body}");
 
+    // SharedPreferences を初期化（必須）
+    // これがなければローカルに保存された店舗IDや勤務状態にアクセスできない
+    await SharedPreferences.getInstance();
+
+    // SupabaseManager を初期化（必須）
+    // これによりローカルに保存された店舗IDと勤務状態が読み込まれる
+    await SupabaseManager.initialize();
+
+    // ここで勤務状態を早期チェック - 重要な改良点
+    final storeId = SupabaseManager.getLoggedInStoreId();
+    final isWorking = SupabaseManager.getWorkingStatus();
+    print("バックグラウンド通知チェック: 店舗ID=$storeId, 勤務状態=${isWorking ? '勤務中' : '休憩中'}");
+
+    // 勤務中でない場合は即座にリターン
+    if (!isWorking && !NotificationService.debugAlwaysShowNotifications) {
+      print("勤務中ではないため通知を表示しません");
+      return;
+    }
+
     // 通知サービスを初期化
     await NotificationService.initialize();
 
-    // バックグラウンド通知を表示
+    // バックグラウンド通知を表示（勤務状態と店舗IDの確認も含む）
     await NotificationService.showNotification(message);
     print("===== バックグラウンド通知表示完了 =====");
   } catch (e) {
@@ -255,7 +276,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Staff POS App',
       theme: ThemeData(
-        useMaterial3: true,
+        useMaterial3: false,
         colorScheme: ColorScheme.fromSeed(
           seedColor: Colors.teal,
         ),
