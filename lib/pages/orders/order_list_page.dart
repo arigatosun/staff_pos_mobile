@@ -48,7 +48,7 @@ class TableColorManager {
 /// OrderListPage
 /// ---------------------------------------------------------
 class OrderListPage extends StatefulWidget {
-  final int storeId; // ★ 追加
+  final int storeId;
   const OrderListPage({super.key, required this.storeId});
 
   @override
@@ -87,6 +87,9 @@ class _OrderListPageState extends State<OrderListPage>
 
   StreamSubscription<List<Map<String, dynamic>>>? _tableColorStreamSub;
   StreamSubscription<List<Map<String, dynamic>>>? _storeSettingsStreamSub;
+
+  // 通知の重複処理を防ぐためのセット
+  final Set<String> _processedMessageIds = {};
 
   @override
   void initState() {
@@ -298,7 +301,7 @@ class _OrderListPageState extends State<OrderListPage>
         final resp = await supabase.from('pos_devices').insert({
           'device_name': _deviceName ?? 'POS Device',
           'fcm_token': token,
-          // ★ 必要に応じて 'store_id': widget.storeId も保存するなら追加
+          'store_id': widget.storeId, // 店舗IDを明示的に保存
         }).select().single();
         _currentDeviceId = resp['id'].toString();
       } else {
@@ -307,11 +310,12 @@ class _OrderListPageState extends State<OrderListPage>
             .update({
           'device_name': _deviceName ?? 'POS Device',
           'fcm_token': token,
+          'store_id': widget.storeId, // 店舗IDを明示的に更新
         })
             .eq('id', _currentDeviceId);
       }
       _currentFCMToken = token;
-      print('FCM token updated: $_currentDeviceId');
+      print('FCM token updated: $_currentDeviceId with store ID ${widget.storeId}');
     } catch (e) {
       print('Error updating FCM token: $e');
       if (mounted) {
@@ -356,6 +360,41 @@ class _OrderListPageState extends State<OrderListPage>
 
   void _showNotificationDialog(RemoteMessage message) async {
     if (!mounted) return;
+
+    // まず重複通知をチェック
+    final String messageId = message.messageId ?? DateTime.now().millisecondsSinceEpoch.toString();
+    if (_processedMessageIds.contains(messageId)) {
+      print('通知 ${messageId.substring(0, 15)}... は既に処理済みです。スキップします。');
+      return;
+    }
+
+    // 先に店舗IDの検証を行う
+    final String? notificationStoreId = message.data['storeId'];
+    final int? currentStoreId = SupabaseManager.getLoggedInStoreId();
+
+    print('通知の店舗ID: $notificationStoreId');
+    print('現在のログイン店舗ID: $currentStoreId');
+
+    // 店舗IDが一致しない場合は通知をスキップ
+    if (notificationStoreId != null && currentStoreId != null) {
+      if (notificationStoreId != currentStoreId.toString()) {
+        print('通知の店舗ID($notificationStoreId)が現在のログイン店舗ID($currentStoreId)と一致しないため、通知をスキップします');
+        return;
+      }
+    }
+
+    // 処理済みとしてマーク
+    _processedMessageIds.add(messageId);
+    // セットのサイズを制限（メモリ消費を防ぐため）
+    if (_processedMessageIds.length > 100) {
+      _processedMessageIds.remove(_processedMessageIds.first);
+    }
+
+    print('===== 通知表示処理開始 =====');
+    print('MessageId: $messageId');
+    print('通知データ: ${message.data}');
+
+    // 店舗IDが一致した場合のみ通知を表示
     await _notificationsPlugin.show(
       DateTime.now().millisecond,
       message.notification?.title ?? '新規注文',
@@ -396,6 +435,8 @@ class _OrderListPageState extends State<OrderListPage>
         ],
       ),
     );
+
+    print('===== 通知表示完了 =====');
   }
 
   Future<void> _playNotificationSound() async {

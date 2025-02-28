@@ -3,6 +3,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
+import 'package:staff_pos_app/services/supabase_manager.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _localNotifications =
@@ -76,6 +77,22 @@ class NotificationService {
       if (_processedMessageIds.contains(messageId)) {
         print('通知 ${messageId.substring(0, math.min(15, messageId.length))}... は既に処理済みです。スキップします。');
         return;
+      }
+
+      // データから店舗IDを取得
+      final String? notificationStoreId = message.data['storeId'];
+      // 現在ログインしている店舗のID
+      final int? currentStoreId = SupabaseManager.getLoggedInStoreId();
+
+      print('通知の店舗ID: $notificationStoreId');
+      print('現在のログイン店舗ID: $currentStoreId');
+
+      // 店舗IDが一致しない場合は通知をスキップ
+      if (notificationStoreId != null && currentStoreId != null) {
+        if (notificationStoreId != currentStoreId.toString()) {
+          print('通知の店舗ID($notificationStoreId)が現在のログイン店舗ID($currentStoreId)と一致しないため、通知をスキップします');
+          return;
+        }
       }
 
       // 処理済みとしてマーク
