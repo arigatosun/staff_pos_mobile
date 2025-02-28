@@ -24,6 +24,9 @@ class _SettingsPageState extends State<SettingsPage> {
   /// テーブルカラー情報: [ { table_name: '...', hex_color: '#FFFF...' }, ... ]
   List<Map<String, dynamic>> _tableColorList = [];
 
+  /// 店舗テーブル情報: [ { table_id: '...', table_name: '...', color_info: {...} }, ... ]
+  List<Map<String, dynamic>> _storeTableList = [];
+
   /// ローディング中かどうか
   bool _isLoading = false;
 
@@ -31,7 +34,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _fetchStoreSettings();
-    _fetchTableColors();
+    _fetchStoreTables();
   }
 
   // ------------------------------------------------------------------------
@@ -74,27 +77,66 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   // ------------------------------------------------------------------------
-  // 2) table_colors を全件取得 (store_id で絞り込み)
+  // 2) store_table からテーブル一覧を取得し、table_colors と結合する
   // ------------------------------------------------------------------------
-  Future<void> _fetchTableColors() async {
+  Future<void> _fetchStoreTables() async {
     setState(() => _isLoading = true);
     try {
-      final data = await supabase
+      // 2-1) store_table から店舗のテーブル一覧を取得
+      final tableData = await supabase
+          .from('store_table')
+          .select('id, "tableId", "tableName"')
+          .eq('"storeId"', widget.storeId)
+          .order('"tableName"', ascending: true);
+
+      // 2-2) table_colors からテーブルの色情報を取得
+      final colorData = await supabase
           .from('table_colors')
           .select()
-          .eq('store_id', widget.storeId); // store_id で絞る
+          .eq('store_id', widget.storeId);
 
-      _tableColorList = data.map((row) {
+      // テーブルカラー情報をマップに変換（O(1)検索用）
+      final colorMap = <String, String>{};
+      for (final color in colorData) {
+        final tableName = color['table_name'] as String;
+        final hexColor = color['hex_color'] as String? ?? '#FF9E9E9E';
+        colorMap[tableName] = hexColor;
+      }
+
+      // テーブル情報と色情報を結合
+      final combinedList = <Map<String, dynamic>>[];
+      for (final table in tableData) {
+        final tableId = table['tableId'] as String;
+        final tableName = table['tableName'] as String? ?? tableId;
+
+        // 色情報を検索（なければデフォルト色）
+        // tableName で検索するように変更
+        final hexColor = colorMap[tableName] ?? '#FF9E9E9E';
+
+        combinedList.add({
+          'table_id': tableId,
+          'table_name': tableName,
+          'hex_color': hexColor,
+        });
+      }
+
+      // テーブルカラー情報も別途保持（従来の処理との互換性のため）
+      _tableColorList = combinedList.map((table) {
         return {
-          'table_name': row['table_name'],
-          'hex_color': row['hex_color'] ?? '#FF9E9E9E',
+          'table_name': table['table_name'], // tableName を使用
+          'hex_color': table['hex_color'],
         };
       }).toList();
-        } on PostgrestException catch (e) {
-      debugPrint('table_colors取得エラー: ${e.message}');
+
+      setState(() {
+        _storeTableList = combinedList;
+      });
+
+    } on PostgrestException catch (e) {
+      debugPrint('テーブル一覧取得エラー: ${e.message}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('table_colors取得エラー: ${e.message}')),
+          SnackBar(content: Text('テーブル一覧取得エラー: ${e.message}')),
         );
       }
     } catch (e) {
@@ -137,17 +179,26 @@ class _SettingsPageState extends State<SettingsPage> {
             .insert(settingsData);
       }
 
-      // 3-2) table_colorsの更新
-      for (final row in _tableColorList) {
-        final tName = row['table_name'];
-        final hex = row['hex_color'];
+      // 3-2) table_colorsの保存（upsertを使用）
+      final colorUpserts = <Map<String, dynamic>>[];
 
-        // 複合主キー (store_id, table_name) で特定
+      for (final table in _storeTableList) {
+        final tableId = table['table_id'];
+        final tableName = table['table_name'];
+        final hexColor = table['hex_color'];
+
+        colorUpserts.add({
+          'store_id': widget.storeId,
+          'table_name': tableName, // tableIdではなくtableNameを使用
+          'hex_color': hexColor,
+          'color_index': 0, // デフォルト値
+        });
+      }
+
+      if (colorUpserts.isNotEmpty) {
         await supabase
             .from('table_colors')
-            .update({'hex_color': hex})
-            .eq('store_id', widget.storeId)
-            .eq('table_name', tName);
+            .upsert(colorUpserts, onConflict: 'store_id,table_name');
       }
 
       if (mounted) {
@@ -201,8 +252,16 @@ class _SettingsPageState extends State<SettingsPage> {
 
     // ピッカーで選択された色を反映
     setState(() {
-      tableInfo['hex_color'] =
-      '#${pickedColor.value.toRadixString(16).padLeft(8, '0').toUpperCase()}';
+      final newHexColor = '#${pickedColor.value.toRadixString(16).padLeft(8, '0').toUpperCase()}';
+      tableInfo['hex_color'] = newHexColor;
+
+      // テーブルカラーリストにも反映（同期を保つ）
+      for (final colorInfo in _tableColorList) {
+        if (colorInfo['table_name'] == tableInfo['table_name']) { // table_id ではなく table_name で比較
+          colorInfo['hex_color'] = newHexColor;
+          break;
+        }
+      }
     });
   }
 
@@ -318,8 +377,16 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      for (final info in _tableColorList)
-                        _buildTableColorTile(info),
+                      if (_storeTableList.isEmpty)
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(16.0),
+                            child: Text('設定可能なテーブルがありません'),
+                          ),
+                        )
+                      else
+                        for (final tableInfo in _storeTableList)
+                          _buildTableColorTile(tableInfo),
                     ],
                   ),
                 ),
@@ -392,9 +459,10 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _buildTableColorTile(Map<String, dynamic> info) {
-    final tableName = info['table_name'] as String;
-    final hexColor = info['hex_color'] as String?;
+  Widget _buildTableColorTile(Map<String, dynamic> tableInfo) {
+    final tableId = tableInfo['table_id'] as String;
+    final tableName = tableInfo['table_name'] as String;
+    final hexColor = tableInfo['hex_color'] as String?;
     final currentColor = _parseColor(hexColor) ?? Colors.grey;
 
     return ListTile(
@@ -412,10 +480,10 @@ class _SettingsPageState extends State<SettingsPage> {
             shape: const CircleBorder(),
             elevation: 2,
           ),
-          onPressed: () => _pickColor(info),
+          onPressed: () => _pickColor(tableInfo),
           child: const SizedBox.shrink(),
         ),
       ),
     );
   }
-}
+  }

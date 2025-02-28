@@ -102,7 +102,7 @@ class _OrderListPageState extends State<OrderListPage>
     // table_colors の購読
     _tableColorStreamSub = supabase
         .from('table_colors')
-        .stream(primaryKey: ['table_name'])
+        .stream(primaryKey: ['store_id', 'table_name']) // 複合主キーの指定
         .eq('store_id', widget.storeId)
         .listen((rows) {
       TableColorManager.updateTableColors(rows);
@@ -490,7 +490,7 @@ class _OrderListPageState extends State<OrderListPage>
 
       for (int i = 0; i < items.length; i++) {
         final it = items[i] as Map<String, dynamic>;
-        final name = it['name'] as String? ?? '';
+        final name = it['itemName'] as String? ?? '';
         final qty = it['quantity'] as int? ?? 0;
         final status = it['status'] as String? ?? 'unprovided';
         if (status == 'archived') continue;

@@ -17,6 +17,7 @@ class _PosLoginPageState extends State<PosLoginPage> {
   bool _isLoading = false;
   String? _errorMsg;
   String? _deviceId;
+  bool _obscurePassword = true;
 
   @override
   void dispose() {
@@ -26,6 +27,9 @@ class _PosLoginPageState extends State<PosLoginPage> {
   }
 
   Future<void> _handleLogin() async {
+    // Hide keyboard when login button is pressed
+    FocusScope.of(context).unfocus();
+
     setState(() {
       _isLoading = true;
       _errorMsg = null;
@@ -60,24 +64,7 @@ class _PosLoginPageState extends State<PosLoginPage> {
       // 勤務開始の確認ダイアログを表示
       if (!mounted) return;
 
-      final startWork = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          title: const Text('勤務開始'),
-          content: const Text('勤務を開始しますか？\n「はい」を選択すると通知を受信します。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('いいえ'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('はい'),
-            ),
-          ],
-        ),
-      ) ?? false;
+      final startWork = await _showWorkStartDialog() ?? false;
 
       if (startWork && _deviceId != null) {
         // 勤務開始処理
@@ -102,6 +89,68 @@ class _PosLoginPageState extends State<PosLoginPage> {
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  Future<bool?> _showWorkStartDialog() {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(Icons.work_outline, color: Theme.of(context).primaryColor),
+            const SizedBox(width: 8),
+            const Text('勤務開始'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('勤務を開始しますか？'),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade100),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.notifications_active,
+                      color: Colors.blue.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text('「はい」を選択すると通知を受信します。',
+                        style: TextStyle(fontSize: 13)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            ),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('いいえ'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('はい、開始します'),
+          ),
+        ],
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      ),
+    );
   }
 
   // FCMトークンをシンプルに取得するだけ（重複削除はしない）
@@ -304,12 +353,37 @@ class _PosLoginPageState extends State<PosLoginPage> {
       // デバイスIDを保存
       await SupabaseManager.saveDeviceId(_deviceId!);
 
-      // スナックバーでユーザーに通知
       if (mounted) {
+        // モダンなスナックバーでユーザーに通知
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(isWorking ? '勤務を開始しました。通知を受信します。' : '勤務は開始していません。通知は受信しません。'),
-            backgroundColor: isWorking ? Colors.green : Colors.grey,
+            content: Row(
+              children: [
+                Icon(
+                  isWorking ? Icons.check_circle : Icons.info,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    isWorking ? '勤務を開始しました。通知を受信します。' : '勤務は開始していません。通知は受信しません。',
+                  ),
+                ),
+              ],
+            ),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            backgroundColor: isWorking ? Colors.green.shade700 : Colors.grey.shade700,
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: '閉じる',
+              textColor: Colors.white,
+              onPressed: () {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              },
+            ),
           ),
         );
       }
@@ -318,8 +392,21 @@ class _PosLoginPageState extends State<PosLoginPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('勤務状態の設定に失敗しました: $e'),
-            backgroundColor: Colors.red,
+            content: Row(
+              children: [
+                const Icon(Icons.error_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text('勤務状態の設定に失敗しました: $e'),
+                ),
+              ],
+            ),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            backgroundColor: Colors.red.shade700,
+            duration: const Duration(seconds: 5),
           ),
         );
       }
@@ -328,42 +415,151 @@ class _PosLoginPageState extends State<PosLoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    final primaryColor = Theme.of(context).primaryColor;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('POSログイン'),
+        elevation: 0,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            TextField(
-              controller: _idController,
-              decoration: const InputDecoration(
-                labelText: 'POSログインID',
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Card(
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Icon(
+                        Icons.store,
+                        size: 64,
+                        color: Colors.blue,
+                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'POS システムへようこそ',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 32),
+                      // ID フィールド
+                      TextField(
+                        controller: _idController,
+                        decoration: InputDecoration(
+                          labelText: 'POSログインID',
+                          hintText: 'IDを入力してください',
+                          prefixIcon: const Icon(Icons.person),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          floatingLabelBehavior: FloatingLabelBehavior.auto,
+                        ),
+                        keyboardType: TextInputType.text,
+                        textInputAction: TextInputAction.next,
+                      ),
+                      const SizedBox(height: 16),
+                      // パスワードフィールド
+                      TextField(
+                        controller: _passController,
+                        decoration: InputDecoration(
+                          labelText: 'POSログインパスワード',
+                          hintText: 'パスワードを入力してください',
+                          prefixIcon: const Icon(Icons.lock),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _obscurePassword
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                              color: Colors.grey,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _obscurePassword = !_obscurePassword;
+                              });
+                            },
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          floatingLabelBehavior: FloatingLabelBehavior.auto,
+                        ),
+                        obscureText: _obscurePassword,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _handleLogin(),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // エラーメッセージ
+                      if (_errorMsg != null)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.red.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.error_outline, color: Colors.red.shade700),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  _errorMsg!,
+                                  style: TextStyle(color: Colors.red.shade700),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                      if (_errorMsg != null) const SizedBox(height: 24),
+
+                      // ログインボタン
+                      SizedBox(
+                        height: 50,
+                        child: ElevatedButton(
+                          onPressed: _isLoading ? null : _handleLogin,
+                          style: ElevatedButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 2,
+                          ),
+                          child: _isLoading
+                              ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                              : const Text(
+                            'ログイン',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _passController,
-              decoration: const InputDecoration(
-                labelText: 'POSログインパスワード',
-              ),
-              obscureText: true,
-            ),
-            const SizedBox(height: 24),
-            if (_errorMsg != null)
-              Text(
-                _errorMsg!,
-                style: const TextStyle(color: Colors.red),
-              ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _isLoading ? null : _handleLogin,
-              child: _isLoading
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text('ログイン'),
-            ),
-          ],
+          ),
         ),
       ),
     );

@@ -7,7 +7,7 @@ import 'package:staff_pos_app/pages/settings/settings_page.dart';
 import 'package:staff_pos_app/services/supabase_manager.dart';
 
 class HomePage extends StatefulWidget {
-  final int storeId; // 受け取り用
+  final int storeId;
   const HomePage({super.key, required this.storeId});
 
   @override
@@ -22,7 +22,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String? _deviceId;
 
   // 後から初期化するため late
-  late final List<Widget> _pages;
+  late final List<Widget> _pageWidgets;
+  late final List<String> _pageTitles;
 
   @override
   void initState() {
@@ -30,8 +31,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     // ライフサイクル監視を追加
     WidgetsBinding.instance.addObserver(this);
 
+    // ページタイトル
+    _pageTitles = [
+      '注文管理',
+      'テーブル管理',
+      '会計履歴',
+      '設定',
+    ];
+
     // 子ページに storeId を渡す
-    _pages = [
+    _pageWidgets = [
       OrderListPage(storeId: widget.storeId),
       TableListPage(storeId: widget.storeId),
       PaymentHistoryPage(storeId: widget.storeId),
@@ -130,7 +139,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             'store_id': widget.storeId,
             'updated_at': DateTime.now().toIso8601String(),
           })
-              .eq('id', _deviceId!);  // <- ここに非null断言演算子(!)を追加
+              .eq('id', _deviceId!);
 
           print('既存デバイス更新: $_deviceId');
 
@@ -171,7 +180,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           .from('staff_work_status')
           .select('work_started_at')
           .eq('id', statusId)
-          .limit(1);  // 複数行返ってきても1つだけ処理
+          .limit(1);
 
       if (response.isNotEmpty && response[0]['work_started_at'] != null) {
         final startedAt = DateTime.parse(response[0]['work_started_at']);
@@ -217,10 +226,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final statusResponse = await supabase
           .from('staff_work_status')
           .select('*')
-          .eq('device_id', _deviceId!) // ここで非null断言を使用
+          .eq('device_id', _deviceId!)
           .eq('store_id', widget.storeId)
           .order('updated_at', ascending: false)
-          .limit(1);  // 最新のステータスのみ取得
+          .limit(1);
 
       if (statusResponse.isNotEmpty) {
         final latestStatus = statusResponse[0];
@@ -255,11 +264,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> _toggleWorkStatus() async {
     if (_deviceId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('デバイス情報が取得できないため、勤務状態を変更できません。'),
-          backgroundColor: Colors.red,
-        ),
+      _showSnackBar(
+        message: 'デバイス情報が取得できないため、勤務状態を変更できません。',
+        isError: true,
       );
       return;
     }
@@ -316,97 +323,214 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       setState(() => _isWorking = newStatus);
 
       // 勤務状態の変更を通知
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(newStatus ? '勤務を開始しました。通知を受信します。' : '勤務を終了しました。通知は受信しません。'),
-          backgroundColor: newStatus ? Colors.green : Colors.grey,
-        ),
+      _showSnackBar(
+        message: newStatus ? '勤務を開始しました。通知を受信します。' : '勤務を終了しました。通知は受信しません。',
+        isSuccess: newStatus,
       );
     } catch (e) {
       print('勤務状態の更新エラー: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('勤務状態の更新に失敗しました: $e'),
-          backgroundColor: Colors.red,
-        ),
+      _showSnackBar(
+        message: '勤務状態の更新に失敗しました: $e',
+        isError: true,
       );
     } finally {
       setState(() => _isLoading = false);
     }
   }
 
+  // モダンなスナックバーを表示する関数
+  void _showSnackBar({
+    required String message,
+    bool isSuccess = false,
+    bool isError = false,
+  }) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline :
+              isSuccess ? Icons.check_circle : Icons.info_outline,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+        margin: const EdgeInsets.all(12),
+        backgroundColor: isError ? Colors.red.shade700 :
+        isSuccess ? Colors.green.shade700 : Colors.grey.shade700,
+        duration: const Duration(seconds: 4),
+        action: SnackBarAction(
+          label: '閉じる',
+          textColor: Colors.white,
+          onPressed: () {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          },
+        ),
+      ),
+    );
+  }
+
   void _onItemTapped(int index) {
     setState(() => _selectedIndex = index);
   }
 
+  // 不要なステータスインジケーターは削除
+
   @override
   Widget build(BuildContext context) {
+    final primaryColor = Theme.of(context).primaryColor;
+
     return Scaffold(
-      // 勤務状態バーを追加
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(56.0),
-        child: Container(
-          color: _isWorking ? Colors.green[100] : Colors.red[100],
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-          child: SafeArea(
+        preferredSize: const Size.fromHeight(0), // 高さを0にしてAppBarを非表示に
+        child: AppBar(
+          elevation: 0,
+          backgroundColor: Colors.white,
+        ),
+      ),
+      // ページコンテンツの上に勤務状態コントロールを追加
+      body: Column(
+        children: [
+          // 勤務状態コントロールエリア（モダンなUI）
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  offset: const Offset(0, 2),
+                  blurRadius: 4,
+                ),
+              ],
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 14),
             child: Row(
               children: [
-                Icon(
-                  _isWorking ? Icons.check_circle : Icons.not_interested,
-                  color: _isWorking ? Colors.green : Colors.red,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  _isWorking ? '勤務中' : '休憩中',
-                  style: TextStyle(
-                    color: _isWorking ? Colors.green[800] : Colors.red[800],
-                    fontWeight: FontWeight.bold,
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _isWorking ? Colors.green.shade50 : Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _isWorking ? Colors.green.shade300 : Colors.grey.shade300,
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: _isWorking ? Colors.green.shade100 : Colors.grey.shade200,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            _isWorking ? Icons.work_outline : Icons.work_off_outlined,
+                            color: _isWorking ? Colors.green.shade800 : Colors.grey.shade700,
+                            size: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _isWorking ? '現在勤務中です' : '現在休憩中です',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _isLoading
+                            ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                            : ElevatedButton(
+                          onPressed: _toggleWorkStatus,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _isWorking ? Colors.red.shade600 : Colors.green.shade600,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(30),
+                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                _isWorking ? Icons.pause : Icons.play_arrow,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 2),
+                              Text(
+                                _isWorking ? '勤務終了' : '勤務開始',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                const Spacer(),
-                _isLoading
-                    ? const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-                    : ElevatedButton(
-                  onPressed: _toggleWorkStatus,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isWorking ? Colors.red : Colors.green,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  ),
-                  child: Text(_isWorking ? '勤務終了' : '勤務開始'),
                 ),
               ],
             ),
           ),
-        ),
+
+          // メインコンテンツ
+          Expanded(
+            child: _pageWidgets[_selectedIndex],
+          ),
+        ],
       ),
-      // 既存同様、メインコンテンツは画面を切り替える
-      body: _pages[_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
-        selectedItemColor: Colors.teal,
+        selectedItemColor: primaryColor,
+        unselectedItemColor: Colors.grey.shade600,
+        selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+        unselectedLabelStyle: const TextStyle(fontSize: 12),
         showUnselectedLabels: true,
+        elevation: 8,
         items: const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.list),
+            icon: Icon(Icons.list_alt),
+            activeIcon: Icon(Icons.list_alt),
             label: '注文管理',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.table_bar),
+            activeIcon: Icon(Icons.table_bar),
             label: 'テーブル管理',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.history),
+            icon: Icon(Icons.receipt_long),
+            activeIcon: Icon(Icons.receipt_long),
             label: '会計履歴',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.settings),
+            activeIcon: Icon(Icons.settings),
             label: '設定',
           ),
         ],
