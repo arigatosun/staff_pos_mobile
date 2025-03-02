@@ -24,10 +24,17 @@ class SupabaseManager {
 
   // 初期化メソッドを改良
   static Future<void> initialize() async {
-    if (_initialized) return;
+    if (_initialized) {
+      print('Supabase既に初期化済み、再初期化をスキップします');
+      return;
+    }
 
     try {
       print('Supabase初期化開始...');
+
+      // 先に保存された値を読み込む - 初期化前に状態を設定
+      await _loadSavedValues();
+      print('保存された値を事前読み込み: storeId=$_currentStoreId, isWorking=$_isWorking');
 
       await Supabase.initialize(
         url: 'https://bwjvwohxwjbztaawcyxw.supabase.co',
@@ -58,8 +65,8 @@ class SupabaseManager {
       // リアルタイム接続を明示的に確立
       _client.realtime.connect();
 
-      // 保存されている値を読み込む
-      await _loadSavedValues();
+      // 初期化後に保存値との整合性チェック - デバッグ用
+      print('SupabaseManager初期化後のステータス: storeId=$_currentStoreId, isWorking=$_isWorking');
 
     } catch (e) {
       print('Supabase初期化エラー: $e');
@@ -67,7 +74,7 @@ class SupabaseManager {
     }
   }
 
-  // 保存されている値を読み込む
+// 保存されている値を読み込む（独立した関数として実装）
   static Future<void> _loadSavedValues() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -77,6 +84,8 @@ class SupabaseManager {
       if (storeId != null) {
         _currentStoreId = storeId;
         print('保存された店舗IDを読み込みました: $storeId');
+      } else {
+        print('保存された店舗IDがありません');
       }
 
       // 勤務状態
@@ -84,6 +93,8 @@ class SupabaseManager {
       if (isWorking != null) {
         _isWorking = isWorking;
         print('保存された勤務状態を読み込みました: ${isWorking ? "勤務中" : "休憩中"}');
+      } else {
+        print('保存された勤務状態がありません');
       }
     } catch (e) {
       print('保存値の読み込みエラー: $e');

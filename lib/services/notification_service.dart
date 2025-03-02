@@ -75,18 +75,23 @@ class NotificationService {
   }
 
   // 通知を表示するメソッド（フォアグラウンド/バックグラウンド共通）
-  static Future<void> showNotification(RemoteMessage message) async {
+  static Future<void> showNotification(RemoteMessage message, {bool forceShowNotification = false}) async {
     try {
-      // まず即座に勤務状態を確認（バックグラウンド対応）
-      final currentStoreId = SupabaseManager.getLoggedInStoreId();
-      final isWorkingDirectCheck = SupabaseManager.getWorkingStatus();
+      // forceShowNotificationがtrueの場合は勤務状態チェックをスキップ
+      if (!forceShowNotification) {
+        // まず即座に勤務状態を確認（バックグラウンド対応）
+        final currentStoreId = SupabaseManager.getLoggedInStoreId();
+        final isWorkingDirectCheck = SupabaseManager.getWorkingStatus();
 
-      print('通知受信: 即座の勤務状態チェック - 店舗ID=${currentStoreId}, 勤務状態=${isWorkingDirectCheck ? "勤務中" : "休憩中"}');
+        print('通知受信: 即座の勤務状態チェック - 店舗ID=${currentStoreId}, 勤務状態=${isWorkingDirectCheck ? "勤務中" : "休憩中"}');
 
-      // 勤務状態が休憩中で、デバッグモードでない場合は通知をスキップ
-      if (currentStoreId != null && !isWorkingDirectCheck && !debugAlwaysShowNotifications) {
-        print('即座のチェック: 休憩中のため通知をスキップします');
-        return;
+        // 勤務状態が休憩中で、デバッグモードでない場合は通知をスキップ
+        if (currentStoreId != null && !isWorkingDirectCheck && !debugAlwaysShowNotifications) {
+          print('即座のチェック: 休憩中のため通知をスキップします');
+          return;
+        }
+      } else {
+        print('強制通知モード: 勤務状態チェックをスキップします');
       }
 
       final String messageId = message.messageId ?? DateTime.now().millisecondsSinceEpoch.toString();
@@ -108,6 +113,7 @@ class NotificationService {
 
       // データから店舗IDを取得
       final String? notificationStoreId = message.data['storeId'];
+      final currentStoreId = SupabaseManager.getLoggedInStoreId();
 
       print('通知の店舗ID: $notificationStoreId');
       print('現在のログイン店舗ID: $currentStoreId');
@@ -119,11 +125,14 @@ class NotificationService {
           return;
         }
 
-        // 勤務状態を確認 - 改良版のチェックロジック（データベース確認も含む）
-        final isWorking = await _checkWorkingStatus(currentStoreId);
-        if (!isWorking && !debugAlwaysShowNotifications) {
-          print('勤務中ではないため、通知をスキップします');
-          return;
+        // forceShowNotificationがtrueの場合は勤務状態チェックをスキップ
+        if (!forceShowNotification) {
+          // 勤務状態を確認 - 改良版のチェックロジック（データベース確認も含む）
+          final isWorking = await _checkWorkingStatus(currentStoreId);
+          if (!isWorking && !debugAlwaysShowNotifications) {
+            print('勤務中ではないため、通知をスキップします');
+            return;
+          }
         }
       } else {
         // 店舗IDが不明な場合は安全策としてスキップ（表示しない）

@@ -22,46 +22,59 @@ import 'package:shared_preferences/shared_preferences.dart';
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
-    // バックグラウンドでのFirebase初期化は必須
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-
     print("===== バックグラウンド通知受信 =====");
     print("MessageId: ${message.messageId}");
     print("通知データ: ${message.data}");
     print("通知タイトル: ${message.notification?.title}");
     print("通知本文: ${message.notification?.body}");
 
-    // SharedPreferences を初期化（必須）
-    // これがなければローカルに保存された店舗IDや勤務状態にアクセスできない
-    await SharedPreferences.getInstance();
+    // バックグラウンドでのFirebase初期化は必須
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
 
-    // SupabaseManager を初期化（必須）
-    // これによりローカルに保存された店舗IDと勤務状態が読み込まれる
+    // SharedPreferences を初期化（必須）
+    final prefs = await SharedPreferences.getInstance();
+
+    // ★★★ 重要: 直接 SharedPreferences から勤務状態を取得 ★★★
+    // SupabaseManager に依存せず、直接プリミティブな値を取得することで
+    // 初期化の問題を回避します
+    final isWorkingDirect = prefs.getBool('is_working') ?? false;
+    final storeIdDirect = prefs.getInt('current_store_id');
+
+    print("バックグラウンド通知チェック（直接取得）: 店舗ID=$storeIdDirect, 勤務状態=${isWorkingDirect ? '勤務中' : '休憩中'}");
+
+    // 勤務中でない場合は即座にリターン（直接取得した値を使用）
+    if (!isWorkingDirect && !NotificationService.debugAlwaysShowNotifications) {
+      print("勤務中ではないため通知を表示しません（直接チェック）");
+      return;
+    }
+
+    // SupabaseManager を初期化
     await SupabaseManager.initialize();
 
-    // ここで勤務状態を早期チェック - 重要な改良点
+    // 念のため、SupabaseManager からも値を取得して確認（ログ目的）
     final storeId = SupabaseManager.getLoggedInStoreId();
     final isWorking = SupabaseManager.getWorkingStatus();
-    print("バックグラウンド通知チェック: 店舗ID=$storeId, 勤務状態=${isWorking ? '勤務中' : '休憩中'}");
+    print("バックグラウンド通知チェック（SupabaseManager）: 店舗ID=$storeId, 勤務状態=${isWorking ? '勤務中' : '休憩中'}");
 
-    // 勤務中でない場合は即座にリターン
-    if (!isWorking && !NotificationService.debugAlwaysShowNotifications) {
-      print("勤務中ではないため通知を表示しません");
-      return;
+    // 値が不一致の場合は警告ログを出力
+    if (isWorkingDirect != isWorking) {
+      print("警告: 直接取得した勤務状態とSupabaseManagerの勤務状態が一致しません");
+      print("直接取得: $isWorkingDirect, SupabaseManager: $isWorking");
     }
 
     // 通知サービスを初期化
     await NotificationService.initialize();
 
-    // バックグラウンド通知を表示（勤務状態と店舗IDの確認も含む）
-    await NotificationService.showNotification(message);
+    // バックグラウンド通知を表示（直接取得した勤務状態を優先する）
+    await NotificationService.showNotification(message, forceShowNotification: isWorkingDirect);
     print("===== バックグラウンド通知表示完了 =====");
   } catch (e) {
     print("バックグラウンド通知エラー: $e");
   }
 }
+
 
 // FCMトークンを取得する関数
 Future<String?> getFCMToken() async {
