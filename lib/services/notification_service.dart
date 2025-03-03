@@ -212,6 +212,13 @@ class NotificationService {
         ),
         payload: message.data['orderId'], // タップ時に渡されるデータ
       );
+      try {
+        await _audioPlayer.play(AssetSource('notification_sound.mp3'));
+        print('通知音を再生しました');
+      } catch (audioError) {
+        print('通知音の再生に失敗: $audioError');
+      }
+
       print('===== 通知表示完了 =====');
     } catch (e) {
       print('通知表示エラー: $e');

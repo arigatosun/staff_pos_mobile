@@ -5,6 +5,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:staff_pos_app/services/supabase_manager.dart';
 import 'package:staff_pos_app/services/notification_service.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 // 日付フォーマットのロケールデータを初期化
 import 'package:intl/date_symbol_data_local.dart';
@@ -69,6 +70,15 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
     // バックグラウンド通知を表示（直接取得した勤務状態を優先する）
     await NotificationService.showNotification(message, forceShowNotification: isWorkingDirect);
+    // 追加: 通知音を明示的に再生
+    try {
+      final player = AudioPlayer();
+      await player.play(AssetSource('notification_sound.mp3'));
+      print("バックグラウンド通知音を再生しました");
+    } catch (audioError) {
+      print("バックグラウンド通知音の再生に失敗: $audioError");
+    }
+
     print("===== バックグラウンド通知表示完了 =====");
   } catch (e) {
     print("バックグラウンド通知エラー: $e");
