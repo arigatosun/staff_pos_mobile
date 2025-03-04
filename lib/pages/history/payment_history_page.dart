@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'dart:math'; // 追加：ランダム生成用
+import 'dart:math'; // もし不要なら削除可
 import '../../services/supabase_manager.dart';
 
 class PaymentHistoryPage extends StatefulWidget {
-  final int storeId; // ★ 追加: storeIdを受け取る
+  final int storeId; // ★ storeIdを受け取る
   const PaymentHistoryPage({super.key, required this.storeId});
 
   @override
@@ -16,7 +16,6 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
   DateTime? _startDate;
   DateTime? _endDate;
 
-  // 選択された日付範囲を表示するための文字列
   String get _dateRangeText {
     if (_startDate == null && _endDate == null) return 'すべての履歴';
     if (_startDate != null && _endDate != null && _startDate == _endDate) {
@@ -34,11 +33,11 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
   @override
   void initState() {
     super.initState();
-    // ★ storeIdを使って該当店舗の payment_history を購読
+    // storeId で絞り込んだ payment_history を購読
     _paymentHistoryStream = supabase
         .from('payment_history')
         .stream(primaryKey: ['id'])
-        .eq('store_id', widget.storeId) // ここで絞り込み
+        .eq('store_id', widget.storeId)
         .order('created_at', ascending: false);
   }
 
@@ -52,36 +51,32 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
       final createdAtRaw = pay['created_at'] as String? ?? '';
       if (createdAtRaw.isEmpty) continue;
 
-      DateTime dtLocal;
       try {
+        // 1) UTCとしてパース
         final dtUtc = DateTime.parse(createdAtRaw);
-        dtLocal = dtUtc.toLocal();
+
+        // 2) JST(UTC+9)に強制変換
+        //   - まず .toUtc() でUTCにそろえ、さらに 9時間足す
+        final dtJst = dtUtc.toUtc().add(const Duration(hours: 9));
+
+        // 3) startDate, endDate との比較にも JSTを使う
+        if (_startDate != null) {
+          // 日付だけで比較するため、時分秒を0にしたDateTimeを作る
+          final start = DateTime(_startDate!.year, _startDate!.month, _startDate!.day);
+          if (dtJst.isBefore(start)) continue;
+        }
+        if (_endDate != null) {
+          final end = DateTime(_endDate!.year, _endDate!.month, _endDate!.day, 23, 59, 59);
+          if (dtJst.isAfter(end)) continue;
+        }
+
+        // 4) グルーピングKeyも JSTの日付文字列で
+        final dateKey = DateFormat('yyyy-MM-dd').format(dtJst);
+        grouped.putIfAbsent(dateKey, () => []).add(pay);
+
       } catch (_) {
-        continue;
+        continue; // パース失敗時はスキップ
       }
-
-      if (_startDate != null) {
-        final start = DateTime(
-          _startDate!.year,
-          _startDate!.month,
-          _startDate!.day,
-        );
-        if (dtLocal.isBefore(start)) continue;
-      }
-      if (_endDate != null) {
-        final end = DateTime(
-          _endDate!.year,
-          _endDate!.month,
-          _endDate!.day,
-          23,
-          59,
-          59,
-        );
-        if (dtLocal.isAfter(end)) continue;
-      }
-
-      final dateKey = DateFormat('yyyy-MM-dd').format(dtLocal);
-      grouped.putIfAbsent(dateKey, () => []).add(pay);
     }
 
     return grouped;
@@ -166,7 +161,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
       ),
       body: Column(
         children: [
-          // 日付フィルター表示部分
+          // 日付フィルターUI
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -485,20 +480,23 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
   Widget _buildPaymentItem(Map<String, dynamic> pay) {
     final tableName = pay['table_name'] as String? ?? '不明テーブル';
     final amount = pay['amount'] as num? ?? 0;
-    final String paymentMethodMock =
-    (pay['id']?.toString().hashCode ?? Random().nextInt(1000)) % 2 == 0
-        ? '現金'
-        : 'square';
-    final createdAtRaw = pay['created_at'] as String? ?? '';
+    final paymentMethod = pay['payment_method'] as String? ?? 'square';
+    final paymentMethodLabel = (paymentMethod == 'cash') ? '現金' : 'Square';
 
-    // 金額がマイナスかどうかのチェック
+    final createdAtRaw = pay['created_at'] as String? ?? '';
     final isNegativeAmount = (amount < 0);
 
-    String timeStr = createdAtRaw;
+    // 決済時間を文字列化
+    String timeStr = '';
     if (createdAtRaw.isNotEmpty) {
       try {
-        final dtLocal = DateTime.parse(createdAtRaw).toLocal();
-        timeStr = DateFormat('HH:mm').format(dtLocal);
+        final dtUtc = DateTime.parse(createdAtRaw);
+
+        // +9時間してJSTにする
+        final dtJst = dtUtc.toUtc().add(const Duration(hours: 9));
+
+        // HH:mm 形式で表示
+        timeStr = DateFormat('HH:mm').format(dtJst);
       } catch (_) {}
     }
 
@@ -515,7 +513,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
         color: Colors.transparent,
         child: InkWell(
           onTap: () {
-            // タップ時の詳細表示など
+            // 詳細表示など必要に応じて
           },
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -552,7 +550,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            paymentMethodMock,
+                            paymentMethodLabel,
                             style: TextStyle(
                               fontSize: 13,
                               color: Colors.grey.shade600,
@@ -591,8 +589,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color:
-                    isNegativeAmount ? Colors.red : Colors.black87,
+                    color: isNegativeAmount ? Colors.red : Colors.black87,
                   ),
                 ),
               ],

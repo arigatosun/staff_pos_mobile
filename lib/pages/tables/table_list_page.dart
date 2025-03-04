@@ -111,10 +111,10 @@ class _OrderBlock extends StatelessWidget {
 
       final isCanceled = (status == 'canceled');
 
-      // 変更: キャンセルされたアイテムは小計を0円として表示
+      // キャンセルされたアイテムは小計を0円として表示
       final subTotal = isCanceled ? 0.0 : price * qty;
       final subTotalText = isCanceled
-          ? '¥0'  // キャンセルされた場合は0円と表示
+          ? '¥0'
           : '¥${subTotal.toStringAsFixed(0)}';
 
       rows.add(
@@ -218,22 +218,22 @@ class _TableListPageState extends State<TableListPage> {
   // table_colors テーブル用のストリーム購読
   StreamSubscription<List<Map<String, dynamic>>>? _tableColorStreamSub;
 
-  // payment_history の該当レコードを購読するサブスク
+  // payment_history の該当レコードを購読するサブスク (Square決済用)
   StreamSubscription<List<Map<String, dynamic>>>? _paymentHistoryStreamSub;
 
-  // 現在処理中のテーブル名（支払い処理が進行中かどうかを追跡）
+  // 現在処理中のテーブル名（Square支払いが進行中かどうかを追跡）
   String? _processingTableName;
 
-  // 支払い処理が完了したかどうかのフラグ
+  // 支払い処理が完了したかどうかのフラグ (Square用)
   bool _paymentCompleted = false;
 
-  // タイムアウト用タイマー
+  // タイムアウト用タイマー (Square用)
   Timer? _checkoutTimeoutTimer;
 
-  // ポーリング用タイマー
+  // ポーリング用タイマー (Square用)
   Timer? _pollingTimer;
 
-  // 現在処理中のペイメントID
+  // 現在処理中のペイメントID (Square用)
   String? _currentPaymentHistoryId;
 
   // フィルタ選択
@@ -254,7 +254,7 @@ class _TableListPageState extends State<TableListPage> {
     // table_colors を購読: store_id 絞り込み
     _tableColorStreamSub = supabase
         .from('table_colors')
-        .stream(primaryKey: ['store_id', 'table_name']) // 複合主キーの指定
+        .stream(primaryKey: ['store_id', 'table_name']) // 複合主キー
         .eq('store_id', widget.storeId)
         .listen((rows) {
       print('TableListPage: table_colors updated with ${rows.length} rows');
@@ -275,13 +275,10 @@ class _TableListPageState extends State<TableListPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 支払い完了フラグがtrueなら会計履歴ページに遷移
+    // 支払い完了フラグがtrueなら会計履歴ページに遷移 (Square決済用)
     if (_paymentCompleted && mounted) {
       print('TableListPage: payment completed, navigating to payment history');
-      // フラグをリセットして遷移後に再度遷移しないようにする
       _paymentCompleted = false;
-
-      // 遷移処理を非同期で行う（build中に直接Navigatorを使うのは避ける）
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _navigateToPaymentHistory();
       });
@@ -312,10 +309,8 @@ class _TableListPageState extends State<TableListPage> {
           final allOrders = snapshot.data!;
           print('TableListPage: StreamBuilder received ${allOrders.length} orders');
 
-          // アーカイブされていない注文のみをフィルタリング
-          final orders = allOrders.where((order) =>
-          order['archived'] != true
-          ).toList();
+          // アーカイブされていない注文のみをフィルタ
+          final orders = allOrders.where((order) => order['archived'] != true).toList();
 
           if (orders.isEmpty) {
             return const EmptyOrdersView();
@@ -357,7 +352,7 @@ class _TableListPageState extends State<TableListPage> {
                 ),
               ),
 
-              // 処理中のテーブルがある場合、通知バーを表示
+              // 処理中のテーブルがある場合、通知バーを表示 (Square決済フロー用)
               if (_processingTableName != null)
                 _buildProcessingNotificationBar(),
 
@@ -370,14 +365,13 @@ class _TableListPageState extends State<TableListPage> {
                     final tName = tableNames[index];
                     final tOrders = tableMap[tName]!;
 
-                    // 処理中のテーブルかどうかを判定
+                    // 処理中のテーブルかどうか (Square)
                     final isProcessing = _processingTableName == tName;
 
                     return _TableBlock(
                       tableName: tName,
                       orders: tOrders,
                       isProcessing: isProcessing,
-                      onRequestCheckout: _handleCheckout,
                     );
                   },
                 ),
@@ -389,7 +383,9 @@ class _TableListPageState extends State<TableListPage> {
     );
   }
 
-  // 処理中表示用の通知バー
+  // --- ここから下はSquare決済で使う既存フロー ---
+
+  // 処理中表示用の通知バー (Square決済フロー用)
   Widget _buildProcessingNotificationBar() {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
@@ -434,7 +430,7 @@ class _TableListPageState extends State<TableListPage> {
     );
   }
 
-  // 処理をキャンセル
+  // 処理をキャンセル (Square決済のキャンセル)
   void _cancelProcessing() {
     if (_processingTableName == null) return;
 
@@ -456,17 +452,14 @@ class _TableListPageState extends State<TableListPage> {
       ),
     ).then((confirm) async {
       if (confirm == true) {
-        // タイマーをキャンセル
         _checkoutTimeoutTimer?.cancel();
         _checkoutTimeoutTimer = null;
         _pollingTimer?.cancel();
         _pollingTimer = null;
 
-        // サブスク解除
         await _paymentHistoryStreamSub?.cancel();
         _paymentHistoryStreamSub = null;
 
-        // もし現在処理中のペイメントIDがあれば、キャンセル状態に更新
         if (_currentPaymentHistoryId != null) {
           try {
             await supabase.from('payment_history').update({
@@ -493,7 +486,7 @@ class _TableListPageState extends State<TableListPage> {
     });
   }
 
-  /// 会計処理ボタンが押されたときのフロー
+  /// Square用: 会計処理ボタンが押されたときのフロー
   Future<void> _handleCheckout(String tableName, double total) async {
     print('_handleCheckout: tableName=$tableName, total=$total');
 
@@ -502,7 +495,7 @@ class _TableListPageState extends State<TableListPage> {
       _processingTableName = tableName;
     });
 
-    // 会計ボタン押下 → Square Terminal Checkout作成
+    // Square Terminal Checkoutの作成
     final success = await _createSquareCheckout(tableName, total);
     if (!success) {
       // 失敗した場合は処理中状態を解除
@@ -510,27 +503,25 @@ class _TableListPageState extends State<TableListPage> {
         _processingTableName = null;
         _currentPaymentHistoryId = null;
       });
-      return; // API失敗時は何もしない
+      return;
     }
 
-    // タイムアウトタイマーをセット（2分後）
+    // タイムアウトタイマー(2分後)
     _checkoutTimeoutTimer?.cancel();
     _checkoutTimeoutTimer = Timer(const Duration(minutes: 2), () {
       _handleCheckoutTimeout(tableName);
     });
 
-    // → Webhook で支払いが 'completed' になるのを待つ (サブスクで待機)
-    // テーブルリセットはWebhook完了後に行う
+    // Webhook / payment_history サブスク完了を待つ
   }
 
-  // チェックアウトタイムアウト処理
+  // チェックアウトタイムアウト処理 (Square)
   void _handleCheckoutTimeout(String tableName) {
     print('_handleCheckoutTimeout: Payment timed out for table $tableName');
 
     if (!mounted) return;
     if (_processingTableName != tableName) return; // 既に別の処理に移っている場合
 
-    // 確認ダイアログを表示
     showDialog(
       context: context,
       builder: (c) => AlertDialog(
@@ -541,7 +532,7 @@ class _TableListPageState extends State<TableListPage> {
         actions: [
           TextButton(
             onPressed: () {
-              // タイマーをリセット（継続）
+              // タイマーを再設定して継続
               _checkoutTimeoutTimer?.cancel();
               _checkoutTimeoutTimer = Timer(const Duration(minutes: 2), () {
                 _handleCheckoutTimeout(tableName);
@@ -567,9 +558,8 @@ class _TableListPageState extends State<TableListPage> {
   Future<bool> _createSquareCheckout(String tableName, double total) async {
     print('_createSquareCheckout: tableName=$tableName, total=$total');
     try {
-      // Next.js API の URL
       final url = Uri.parse(
-        'https://a4f3-2400-4150-78a0-5300-c8e5-3419-b8b2-3238.ngrok-free.app/api/payments/terminal-checkout/',
+        'https://a4f3-2400-4150-78a0-5300-c8e5-3419-b8b2-3238.ngrok-free.app/api/payments/terminal-checkout/', // ← 適宜修正
       );
 
       final payload = {
@@ -590,7 +580,6 @@ class _TableListPageState extends State<TableListPage> {
 
       if (resp.statusCode == 200) {
         final jsonBody = jsonDecode(resp.body) as Map<String, dynamic>;
-
         if (jsonBody['success'] == true) {
           final checkout = jsonBody['checkout'] as Map<String, dynamic>?;
           final paymentHistoryId = jsonBody['paymentHistoryId'] as String?;
@@ -602,7 +591,7 @@ class _TableListPageState extends State<TableListPage> {
           final cstatus = checkout['status'];
           print('Checkout created: id=$cid status=$cstatus');
 
-          // 現在処理中のペイメントIDを保存
+          // ペイメントID保存
           _currentPaymentHistoryId = paymentHistoryId;
 
           if (mounted) {
@@ -611,7 +600,7 @@ class _TableListPageState extends State<TableListPage> {
             );
           }
 
-          // payment_history のレコードをサブスク
+          // payment_history をサブスク
           _subscribePaymentHistory(paymentHistoryId, tableName);
 
           return true;
@@ -647,76 +636,70 @@ class _TableListPageState extends State<TableListPage> {
     }
   }
 
-  /// payment_history テーブルで、指定IDの status を監視し 'completed' になったらテーブルリセット
+  /// payment_history テーブルで指定IDの status を監視 (Square)
   void _subscribePaymentHistory(String paymentHistoryId, String tableName) {
     print('_subscribePaymentHistory: id=$paymentHistoryId, table=$tableName');
 
     // 現在の状態を一度確認
     _checkPaymentStatus(paymentHistoryId, tableName);
 
-    // バックアップポーリングを開始
+    // バックアップポーリング開始
     _startPollingBackup(paymentHistoryId, tableName);
 
     try {
-      // すでに購読中なら一旦キャンセル
       _paymentHistoryStreamSub?.cancel();
       _paymentHistoryStreamSub = supabase
           .from('payment_history')
           .stream(primaryKey: ['id'])
           .eq('id', paymentHistoryId)
-          .listen(
-            (List<Map<String, dynamic>> data) async {
-          print('Payment history stream received ${data.length} records');
+          .listen((List<Map<String, dynamic>> data) async {
+        print('Payment history stream received ${data.length} records');
 
-          if (data.isEmpty) {
-            print('Payment history stream: empty data');
-            return;
-          }
+        if (data.isEmpty) {
+          print('Payment history stream: empty data');
+          return;
+        }
 
-          final row = data.first;
-          final status = row['status'] as String?;
-          final updatedAt = row['updated_at'] as String?;
-          print('PaymentHistory status: $status, updated: $updatedAt, id=$paymentHistoryId');
+        final row = data.first;
+        final status = row['status'] as String?;
+        final updatedAt = row['updated_at'] as String?;
+        print('PaymentHistory status: $status, updated: $updatedAt, id=$paymentHistoryId');
 
-          if (status == 'completed') {
-            await _handlePaymentCompleted(tableName);
-          } else if (status == 'failed' || status == 'canceled' || status == 'canceled_by_user') {
-            // null-safety対応
-            await _handlePaymentCanceled(tableName, status ?? 'unknown');
-          }
-        },
-        onError: (error) {
-          // エラーハンドリング
-          print('Payment history stream error: $error');
-          // エラー時にポーリングが動作していることを確認
-          if (_pollingTimer == null || !_pollingTimer!.isActive) {
-            _startPollingBackup(paymentHistoryId, tableName);
-          }
-        },
-      );
+        if (status == 'completed') {
+          await _handlePaymentCompleted(tableName);
+        } else if (status == 'failed' ||
+            status == 'canceled' ||
+            status == 'canceled_by_user') {
+          await _handlePaymentCanceled(tableName, status ?? 'unknown');
+        }
+      }, onError: (error) {
+        print('Payment history stream error: $error');
+        if (_pollingTimer == null || !_pollingTimer!.isActive) {
+          _startPollingBackup(paymentHistoryId, tableName);
+        }
+      });
     } catch (e) {
       print('Error setting up payment history stream: $e');
-      // エラー時にポーリングが動作していることを確認
       if (_pollingTimer == null || !_pollingTimer!.isActive) {
         _startPollingBackup(paymentHistoryId, tableName);
       }
     }
   }
 
-  // 支払い完了時の処理
+  // 支払い完了時の処理 (Square)
   Future<void> _handlePaymentCompleted(String tableName) async {
     print('Payment completed! Resetting table and navigating to history');
 
-    // タイマーをキャンセル
+    // タイマー停止
     _checkoutTimeoutTimer?.cancel();
     _checkoutTimeoutTimer = null;
     _pollingTimer?.cancel();
     _pollingTimer = null;
 
-    // 支払い完了 → テーブルリセット
+    // テーブルリセット
     await _resetTable(tableName);
 
-    // ★ ここに追加: 該当テーブルの最新のoccupancyレコードを取得して状態を更新
+    // table_occupancy を paid に更新
     try {
       final result = await supabase
           .from('table_occupancy')
@@ -745,36 +728,32 @@ class _TableListPageState extends State<TableListPage> {
 
     if (!mounted) return;
 
-    // 処理中フラグをクリアして会計完了フラグをセット
+    // 処理フラグをクリア & 会計完了フラグをセット
     setState(() {
       _processingTableName = null;
       _currentPaymentHistoryId = null;
       _paymentCompleted = true;
     });
 
-    // ユーザーに通知
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('[$tableName] の支払いが完了しました→リセット完了')),
     );
   }
 
-  // 支払いキャンセル時の処理
+  // 支払いキャンセル時の処理 (Square)
   Future<void> _handlePaymentCanceled(String tableName, String status) async {
     print('Payment $status. Clearing processing state.');
 
-    // タイマーをキャンセル
     _checkoutTimeoutTimer?.cancel();
     _checkoutTimeoutTimer = null;
     _pollingTimer?.cancel();
     _pollingTimer = null;
 
-    // サブスク解除
     await _paymentHistoryStreamSub?.cancel();
     _paymentHistoryStreamSub = null;
 
     if (!mounted) return;
 
-    // 処理中フラグをクリア
     setState(() {
       _processingTableName = null;
       _currentPaymentHistoryId = null;
@@ -785,35 +764,26 @@ class _TableListPageState extends State<TableListPage> {
     );
   }
 
-  // バックアップポーリング開始
+  // バックアップポーリング開始 (Square)
   void _startPollingBackup(String paymentHistoryId, String tableName) {
     print('Starting backup polling for payment $paymentHistoryId');
 
-    // 既存のタイマーをキャンセル
     _pollingTimer?.cancel();
-
-    // 5秒ごとにステータスをポーリング
     _pollingTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      // 処理中でなくなったらポーリングを停止
       if (_processingTableName != tableName) {
         timer.cancel();
         _pollingTimer = null;
         return;
       }
-
       print('Polling payment status: $paymentHistoryId');
       _checkPaymentStatus(paymentHistoryId, tableName);
     });
   }
 
-  // payment_historyテーブルの現在の状態を確認
+  // payment_history テーブルの現在の状態を確認 (Square)
   Future<void> _checkPaymentStatus(String paymentHistoryId, String tableName) async {
     try {
       print('Checking current payment status for id=$paymentHistoryId');
-
-      // キャッシュを避けるためのランダム値
-      final uniqueValue = DateTime.now().millisecondsSinceEpoch;
-
       final result = await supabase
           .from('payment_history')
           .select('*')
@@ -825,10 +795,11 @@ class _TableListPageState extends State<TableListPage> {
       final updatedAt = result['updated_at'] as String?;
       print('Current payment status: $status (updated at: $updatedAt)');
 
-      // すでに完了状態なら即座に処理
       if (status == 'completed') {
         await _handlePaymentCompleted(tableName);
-      } else if (status == 'failed' || status == 'canceled' || status == 'canceled_by_user') {
+      } else if (status == 'failed' ||
+          status == 'canceled' ||
+          status == 'canceled_by_user') {
         await _handlePaymentCanceled(tableName, status!);
       }
     } catch (e) {
@@ -840,20 +811,20 @@ class _TableListPageState extends State<TableListPage> {
   Future<void> _resetTable(String tableName) async {
     print('_resetTable: tableName=$tableName');
     try {
-      // Supabase RPCを呼び出し、テーブルリセット処理を実行
+      // RPCでアーカイブ
       await supabase.rpc('archive_orders_by_table', params: {
         'p_table_name': tableName,
       });
       print('Table reset successful');
 
-      // ★ ここに追加: 新しいセッションを作成（オプション - システム自動管理方式では不要かも）
+      // 新しいセッション作成 (必要に応じて)
       final newSessionId = 'session_${DateTime.now().millisecondsSinceEpoch}_$tableName';
 
       try {
         await supabase.from('table_occupancy').insert({
           'table_id': tableName,
           'store_id': widget.storeId,
-          'people_count': 0, // 初期値
+          'people_count': 0,
           'status': 'active',
           'session_id': newSessionId,
           'updated_at': DateTime.now().toIso8601String(),
@@ -876,7 +847,7 @@ class _TableListPageState extends State<TableListPage> {
           SnackBar(content: Text('テーブルリセット失敗: $e')),
         );
       }
-      throw e; // エラーを上位に伝播させる
+      throw e;
     }
   }
 
@@ -884,21 +855,15 @@ class _TableListPageState extends State<TableListPage> {
   void _navigateToPaymentHistory() {
     print('_navigateToPaymentHistory');
     if (!mounted) return;
-
-    // ウィジェットがマウントされているか確認してからナビゲーション
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => PaymentHistoryPage(storeId: widget.storeId),
       ),
     ).then((_) {
-      // 画面に戻ってきたときにデータを強制リフレッシュ
-      setState(() {
-        // 状態更新をトリガー
-      });
+      setState(() {});
     });
   }
 
-  /// フィルタに応じてオーダーを絞り込み
   /// フィルタに応じてオーダーを絞り込み
   List<Map<String, dynamic>> _filterOrders(List<Map<String, dynamic>> orders) {
     if (_selectedFilter == OrderFilter.all) return orders;
@@ -930,20 +895,110 @@ class _TableListPageState extends State<TableListPage> {
     }
     return map;
   }
+
+  // --- ここから下は現金会計用の追加メソッド ---
+
+  /// 支払い方法選択ダイアログを表示 → 現金 or Square
+  Future<void> _showPaymentMethodDialog(String tableName, double total) async {
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('支払い方法を選択'),
+          content: const Text('どちらで会計しますか？'),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                // 現金支払い
+                await _handleCashPayment(tableName, total);
+              },
+              child: const Text('現金'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                // Square決済
+                await _handleCheckout(tableName, total);
+              },
+              child: const Text('Square'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 現金支払いフロー
+  Future<void> _handleCashPayment(String tableName, double total) async {
+    try {
+      // payment_history に status='completed', payment_method='cash' でINSERT
+      final inserted = await supabase.from('payment_history').insert({
+        'table_name': tableName,
+        'store_id': widget.storeId,
+        'amount': total,
+        'status': 'completed',
+        'payment_method': 'cash',
+        'paid_at': DateTime.now().toIso8601String(),
+      }).select().single();
+      print('Cash payment inserted: $inserted');
+
+      // テーブルリセット
+      await _resetTable(tableName);
+
+      // occupancyを paid に更新
+      try {
+        final result = await supabase
+            .from('table_occupancy')
+            .select('id')
+            .eq('table_id', tableName)
+            .eq('store_id', widget.storeId)
+            .order('created_at', ascending: false)
+            .limit(1)
+            .maybeSingle();
+
+        // result が null でなければデータあり
+        if (result != null) {
+          final occupancyId = result['id'];
+          await supabase.from('table_occupancy').update({
+            'status': 'paid',
+            'last_paid_at': DateTime.now().toIso8601String(),
+            'updated_at': DateTime.now().toIso8601String(),
+          }).eq('id', occupancyId);
+        }
+      } catch (e) {
+        print('Error updating table occupancy status for cash: $e');
+      }
+
+
+      // 会計履歴ページへ遷移
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('[$tableName] 現金支払い完了')),
+        );
+        _navigateToPaymentHistory();
+      }
+    } catch (e) {
+      print('Error in _handleCashPayment: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('現金支払いエラー: $e')),
+        );
+      }
+    }
+  }
 }
 
 /// テーブルブロック
 class _TableBlock extends StatelessWidget {
   final String tableName;
   final List<Map<String, dynamic>> orders;
-  final bool isProcessing; // 処理中かどうかのフラグを追加
-  final Future<void> Function(String tableName, double total) onRequestCheckout;
+  final bool isProcessing; // 処理中かどうかのフラグ
 
   const _TableBlock({
     required this.tableName,
     required this.orders,
     this.isProcessing = false,
-    required this.onRequestCheckout,
   });
 
   @override
@@ -971,7 +1026,7 @@ class _TableBlock extends StatelessWidget {
             ),
             Row(
               children: [
-                // 処理中の場合はインジケーターを表示
+                // 処理中の場合はインジケーター
                 if (isProcessing)
                   Container(
                     margin: const EdgeInsets.only(right: 8),
@@ -1000,7 +1055,7 @@ class _TableBlock extends StatelessWidget {
             ),
           ),
 
-          // 会計 & リセットボタン
+          // ボタン群
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -1009,7 +1064,7 @@ class _TableBlock extends StatelessWidget {
                 Expanded(
                   child: ElevatedButton(
                     onPressed: isProcessing
-                        ? null // 処理中は押せないように
+                        ? null
                         : () async {
                       final confirm = await showDialog<bool>(
                         context: context,
@@ -1033,8 +1088,12 @@ class _TableBlock extends StatelessWidget {
                       );
                       if (confirm != true) return;
 
-                      // 会計に進むときは onRequestCheckout を呼ぶ
-                      await onRequestCheckout(tableName, tableTotal);
+                      // 支払い方法を選択させる
+                      final parent =
+                      context.findAncestorStateOfType<_TableListPageState>();
+                      if (parent != null) {
+                        await parent._showPaymentMethodDialog(tableName, tableTotal);
+                      }
                     },
                     style: _buttonStyle(),
                     child: const Text('会計に進む'),
@@ -1042,11 +1101,11 @@ class _TableBlock extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
 
-                // テーブルリセット (任意: Webhook完了前に操作しないよう注意が必要)
+                // テーブルリセット
                 Expanded(
                   child: ElevatedButton(
                     onPressed: isProcessing
-                        ? null // 処理中は押せないように
+                        ? null
                         : () async {
                       final confirm = await showDialog<bool>(
                         context: context,
@@ -1068,14 +1127,11 @@ class _TableBlock extends StatelessWidget {
                         ),
                       );
                       if (confirm == true) {
-                        // _TableListPageState を取得
-                        final parent = context.findAncestorStateOfType<_TableListPageState>();
+                        final parent =
+                        context.findAncestorStateOfType<_TableListPageState>();
                         if (parent != null) {
                           try {
-                            // テーブルリセット実行
                             await parent._resetTable(tableName);
-
-                            // リセット成功後、会計履歴ページに遷移
                             parent._navigateToPaymentHistory();
                           } catch (e) {
                             // エラー処理は _resetTable 内で行われる
@@ -1107,15 +1163,13 @@ class _TableBlock extends StatelessWidget {
     );
   }
 
-  /// テーブルのステータスを判定
+  /// テーブルのステータス
   String _getTableStatus(List<Map<String, dynamic>> orders) {
     bool hasUnprovided = false;
     bool hasPaid = false;
 
     for (var o in orders) {
       final items = o['items'] as List<dynamic>? ?? [];
-
-      // 一つでも「未提供」かつ「キャンセルされていない」商品があればフラグを立てる
       if (items.any((i) {
         final status = (i as Map)['status'];
         return status != 'provided' && status != 'canceled';
@@ -1123,21 +1177,17 @@ class _TableBlock extends StatelessWidget {
         hasUnprovided = true;
       }
 
-      // 一つでも paid 状態のオーダーがあればフラグを立てる
       if (o['status'] == 'paid') {
         hasPaid = true;
       }
     }
 
-    // 未提供があるならテーブル全体を 'unprovided' とみなす
     if (hasUnprovided) {
       return 'unprovided';
     }
-    // それ以外で一つでも paid があれば 'paid'
     if (hasPaid) {
       return 'paid';
     }
-    // 上記に該当しなければ全提供済み
     return 'provided';
   }
 
@@ -1152,17 +1202,15 @@ class _TableBlock extends StatelessWidget {
         final price = (itemMap['itemPrice'] as num?)?.toDouble() ?? 0.0;
         final status = itemMap['status'] as String? ?? 'unprovided';
 
-        // 変更: キャンセルされた場合は0円として扱う（マイナス計算しない）
         if (status != 'canceled') {
           sum += price * qty;
         }
-        // キャンセルの場合は何も加算しない
       }
     }
     return sum;
   }
 
-  /// オーダー明細のウィジェットリストを生成
+  /// オーダー明細のウィジェットリスト
   List<Widget> _buildOrderWidgets(List<Map<String, dynamic>> orders) {
     final sorted = [...orders];
     sorted.sort((a, b) {
