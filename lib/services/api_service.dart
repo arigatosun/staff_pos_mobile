@@ -7,7 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ApiService {
   // Next.js 側のベースURL (ローカルテスト用アドレスなど)
-  static const String baseUrl = 'https://cf42-2400-4150-78a0-5300-a58e-41a-bed2-a718.ngrok-free.app';
+  static const String baseUrl = 'https://a4f3-2400-4150-78a0-5300-c8e5-3419-b8b2-3238.ngrok-free.app';
 
   /// POSログインAPIを呼び出す
   /// 成功時 -> storeId を返す

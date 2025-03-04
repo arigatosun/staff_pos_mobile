@@ -567,7 +567,7 @@ class _TableListPageState extends State<TableListPage> {
     try {
       // Next.js API の URL
       final url = Uri.parse(
-        'https://cf42-2400-4150-78a0-5300-a58e-41a-bed2-a718.ngrok-free.app/api/payments/terminal-checkout/',
+        'https://a4f3-2400-4150-78a0-5300-c8e5-3419-b8b2-3238.ngrok-free.app/api/payments/terminal-checkout/',
       );
 
       final payload = {
