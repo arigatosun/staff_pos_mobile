@@ -110,9 +110,11 @@ class _OrderBlock extends StatelessWidget {
       final price = (item['itemPrice'] as num?)?.toDouble() ?? 0.0;
 
       final isCanceled = (status == 'canceled');
-      final subTotal = price * qty * (isCanceled ? -1 : 1);
+
+      // 変更: キャンセルされたアイテムは小計を0円として表示
+      final subTotal = isCanceled ? 0.0 : price * qty;
       final subTotalText = isCanceled
-          ? '-¥${(price * qty).toStringAsFixed(0)}'
+          ? '¥0'  // キャンセルされた場合は0円と表示
           : '¥${subTotal.toStringAsFixed(0)}';
 
       rows.add(
@@ -714,6 +716,29 @@ class _TableListPageState extends State<TableListPage> {
     // 支払い完了 → テーブルリセット
     await _resetTable(tableName);
 
+    // ★ ここに追加: 該当テーブルの最新のoccupancyレコードを取得して状態を更新
+    try {
+      final result = await supabase
+          .from('table_occupancy')
+          .select('id')
+          .eq('table_id', tableName)
+          .eq('store_id', widget.storeId)
+          .order('created_at', ascending: false)
+          .limit(1)
+          .single();
+
+      if (result != null) {
+        await supabase.from('table_occupancy').update({
+          'status': 'paid',
+          'last_paid_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        }).eq('id', result['id']);
+        print('Table occupancy updated to paid: $tableName, id: ${result['id']}');
+      }
+    } catch (e) {
+      print('Error updating table occupancy status: $e');
+    }
+
     // サブスク解除
     await _paymentHistoryStreamSub?.cancel();
     _paymentHistoryStreamSub = null;
@@ -816,10 +841,27 @@ class _TableListPageState extends State<TableListPage> {
     print('_resetTable: tableName=$tableName');
     try {
       // Supabase RPCを呼び出し、テーブルリセット処理を実行
-      await supabase.rpc('reset_table', params: {
+      await supabase.rpc('archive_orders_by_table', params: {
         'p_table_name': tableName,
       });
       print('Table reset successful');
+
+      // ★ ここに追加: 新しいセッションを作成（オプション - システム自動管理方式では不要かも）
+      final newSessionId = 'session_${DateTime.now().millisecondsSinceEpoch}_$tableName';
+
+      try {
+        await supabase.from('table_occupancy').insert({
+          'table_id': tableName,
+          'store_id': widget.storeId,
+          'people_count': 0, // 初期値
+          'status': 'active',
+          'session_id': newSessionId,
+          'updated_at': DateTime.now().toIso8601String(),
+        });
+        print('New session created for reset table: $tableName, session: $newSessionId');
+      } catch (sessionErr) {
+        print('Error creating new session: $sessionErr');
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1070,15 +1112,21 @@ class _TableBlock extends StatelessWidget {
     bool hasUnprovided = false;
     bool hasPaid = false;
 
-    for (var o in orders) {    final items = o['items'] as List<dynamic>? ?? [];
-    // 一つでも unprovided が見つかればフラグを立てる
-    if (items.any((i) => (i as Map)['status'] != 'provided')) {
-      hasUnprovided = true;
-    }
-    // 一つでも paid 状態のオーダーがあればフラグを立てる
-    if (o['status'] == 'paid') {
-      hasPaid = true;
-    }
+    for (var o in orders) {
+      final items = o['items'] as List<dynamic>? ?? [];
+
+      // 一つでも「未提供」かつ「キャンセルされていない」商品があればフラグを立てる
+      if (items.any((i) {
+        final status = (i as Map)['status'];
+        return status != 'provided' && status != 'canceled';
+      })) {
+        hasUnprovided = true;
+      }
+
+      // 一つでも paid 状態のオーダーがあればフラグを立てる
+      if (o['status'] == 'paid') {
+        hasPaid = true;
+      }
     }
 
     // 未提供があるならテーブル全体を 'unprovided' とみなす
@@ -1104,11 +1152,11 @@ class _TableBlock extends StatelessWidget {
         final price = (itemMap['itemPrice'] as num?)?.toDouble() ?? 0.0;
         final status = itemMap['status'] as String? ?? 'unprovided';
 
-        if (status == 'canceled') {
-          sum -= price * qty;
-        } else {
+        // 変更: キャンセルされた場合は0円として扱う（マイナス計算しない）
+        if (status != 'canceled') {
           sum += price * qty;
         }
+        // キャンセルの場合は何も加算しない
       }
     }
     return sum;
