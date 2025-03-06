@@ -559,7 +559,7 @@ class _TableListPageState extends State<TableListPage> {
     print('_createSquareCheckout: tableName=$tableName, total=$total');
     try {
       final url = Uri.parse(
-        'https://a4f3-2400-4150-78a0-5300-c8e5-3419-b8b2-3238.ngrok-free.app/api/payments/terminal-checkout/', // ← 適宜修正
+        'https://aff6-2400-4150-78a0-5300-8c17-49bd-4a79-cc83.ngrok-free.app/api/payments/terminal-checkout/', // ← 適宜修正
       );
 
       final payload = {

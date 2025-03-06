@@ -60,6 +60,11 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/icon/app_icon.jpg"
+  image_path: "assets/icon/app_icon2.jpg"
   adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/icon/app_icon.jpg"
+  # 以下の行を変更
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.jpg" # 前景用に調整したアイコン
+  min_sdk_android: 21 # 最小SDKバージョン
+  remove_alpha_ios: true
+  # アイコンのサイズ調整
+  android_adaptive_icon_padding: true # Androidでパディングを追加
